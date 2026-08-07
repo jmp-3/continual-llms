@@ -1,0 +1,18 @@
+# STUB. Supervised fine-tuning is not implemented in Task 2.
+# `cpt_m2d2.train.sft` validates the checkpoint and then raises NotImplementedError.
+# See the module docstring in src/cpt_m2d2/train/sft.py for the intended implementation.
+
+cpt_checkpoint: ${CPT_RUNS_DIR}/latest/final
+base_model_for_tokenizer_check: ${CPT_MODEL_DIR}
+
+dataset: null                          # to be chosen; must be chat-formatted
+chat_template: null                    # Qwen3-*Base* ships none; SFT attaches one
+completion_only_loss: true             # the prompt is context, not a target
+
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-5                  # below CPT's 2e-5
+num_train_epochs: 2                    # SFT sets are small and are meant to be fit
+max_seq_length: 4096
+bf16: true
+gradient_checkpointing: true

@@ -1,0 +1,84 @@
+# The curriculum is data, not code. Permute `stages` to run a different ordering; nothing
+# in src/ needs to change.
+
+seq_len: 4096
+raw_dir: ${CPT_RAW_DIR}
+packed_dir: ${CPT_PACKED_DIR}
+train_split: train
+eval_split: valid
+
+# ---------------------------------------------------------------------------------------
+# stages, in order. Stage n+1 starts from stage n's weights.
+# ---------------------------------------------------------------------------------------
+#
+# All six are the Wikipedia-side L2 domains of the downloaded subset (see m2d2/MANIFEST.md).
+# The L1 parents are NOT stages: their tarballs are byte-for-byte the union of their L2
+# children, so training on both would double-count the same articles.
+#
+# max_tokens caps each stage at ~20M tokens => ~2.5h at the assumed 2,200 tok/s, inside the
+# 3h ceiling in configs/train/cpt_base.yaml. WITHOUT these caps the four large domains run
+# 19h to 62h each and every one of them would be refused at startup. The uncapped train-side
+# totals are in REPORT_task2.md; raise a cap only together with --allow-long-stage and the
+# understanding that a crash loses the whole stage.
+stages:
+  - {name: s01, domain: Philosophy_and_thinking__Philosophy,            max_tokens: 20000000}
+  - {name: s02, domain: Philosophy_and_thinking__Thinking,              max_tokens: 20000000}
+  # s03 has only ~1M tokens of train text upstream - about two optimizer steps at 524k
+  # tokens/step. It is kept as its own stage so the matrix has a row for it, but it is not a
+  # meaningful weight update on its own. Merge it into s04 if you want six real stages.
+  - {name: s03, domain: Society_and_social_sciences__Social_sciences,   max_tokens: null}
+  - {name: s04, domain: Society_and_social_sciences__Society,           max_tokens: 20000000}
+  - {name: s05, domain: Human_activites__Human_activities,              max_tokens: 20000000}
+  - {name: s06, domain: Human_activites__Impact_of_human_activity,      max_tokens: null}
+
+# `Human_activites` is misspelled upstream (missing an i) and is correct as written here.
+# The corrected spelling matches zero directories. See m2d2/MANIFEST.md section 9.
+
+# ---------------------------------------------------------------------------------------
+# replay
+# ---------------------------------------------------------------------------------------
+# The replay source is deliberately NOT one of the stages: it stays a clean out-of-branch
+# control, so its column in the matrix measures drift rather than recent training. Blocks
+# are drawn without replacement within a stage and the realized fraction is logged - if it
+# drifts from the target, that is a bug, not a rounding artifact.
+replay:
+  enabled: true
+  source: Natural_and_physical_sciences__Physical_sciences
+  ratio: 0.05
+  strict_ratio: false
+  ratio_tolerance: 0.005
+
+# ---------------------------------------------------------------------------------------
+# evaluation
+# ---------------------------------------------------------------------------------------
+# ALL = every domain with a packed eval.bin, which is the six stage domains plus both
+# controls. `Philosophy` (bare) is the papers-side corpus, not Wikipedia - it is packed for
+# evaluation only and never trained on. See m2d2/MANIFEST.md section 6.
+eval_domains: [ALL]
+eval_only_domains:
+  - Philosophy
+  - Natural_and_physical_sciences__Physical_sciences
+
+# Hard cap per eval set. The matrix is O(stages x domains) evaluations - 7 rows x 8 domains
+# here - so uncapped eval splits would cost more wall clock than the training does.
+eval_max_tokens: 2000000
+
+# ---------------------------------------------------------------------------------------
+# document segmentation
+# ---------------------------------------------------------------------------------------
+# "auto" picks the blank-line run length that separates documents from each file's own
+# histogram, and prints the decision. M2D2 is not homogeneous: the Wikipedia side puts a
+# single blank line after each article title and two between articles, while the papers side
+# uses single blank lines only. One fixed rule would mis-segment one of them.
+doc_delimiter_blank_lines: auto
+doc_delimiter_overrides: {}
+
+# ---------------------------------------------------------------------------------------
+# how max_tokens selects blocks
+# ---------------------------------------------------------------------------------------
+# The caps above are applied when a stage is assembled, not when the corpus is packed, so
+# permuting `stages` or changing a cap invalidates nothing on disk.
+#   head   - first N blocks. Deterministic, sequential reads, identical across permutations.
+#   random - N blocks without replacement, seeded per stage. More representative if a
+#            domain's file has ordering structure, but the subset then depends on the seed.
+max_tokens_sampling: head

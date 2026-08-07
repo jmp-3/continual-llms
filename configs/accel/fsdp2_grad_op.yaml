@@ -1,0 +1,48 @@
+# FSDP2, SHARD_GRAD_OP equivalent. For the Task 3 bake-off against DeepSpeed ZeRO-2.
+#
+# In FSDP2 the sharding strategy is expressed as reshard_after_forward:
+#   false -> parameters stay gathered after the forward pass  == SHARD_GRAD_OP (this file)
+#   true  -> parameters are resharded immediately             == FULL_SHARD (fsdp2_full.yaml)
+# So this is the closest FSDP analogue of ZeRO-2: optimizer state and gradients are sharded,
+# parameters are not re-gathered per micro-batch. On a PCIe-only link that is the difference
+# that matters.
+#
+# Wrapping is transformer-block based on the model's actual decoder layer class
+# (Qwen3DecoderLayer, matching configs/model/qwen3_4b.yaml), not a parameter-count heuristic.
+# No offload: host RAM is not the constraint here and the PCIe hop would dominate.
+#
+# Activation checkpointing is left to the Trainer (gradient_checkpointing: true in
+# configs/train/cpt_base.yaml). Enabling it here as well double-wraps the blocks.
+#
+# Launch:
+#   uv run accelerate launch --config_file configs/accel/fsdp2_grad_op.yaml \
+#       -m cpt_m2d2.train.cpt --run-id my-run
+
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+fsdp_config:
+  fsdp_version: 2
+  fsdp_reshard_after_forward: false
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
+  fsdp_offload_params: false
+  fsdp_activation_checkpointing: false
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_sync_module_states: true
+  fsdp_use_orig_params: true
+  fsdp_forward_prefetch: false
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

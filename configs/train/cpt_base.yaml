@@ -1,0 +1,72 @@
+# Continual pre-training hyperparameters and checkpoint policy.
+
+# ---------------------------------------------------------------------------------------
+# optimization
+# ---------------------------------------------------------------------------------------
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 64        # ~524,288 tokens/optimizer step at seq 4096, world 2
+gradient_checkpointing: true
+bf16: true
+optim: adamw_torch
+learning_rate: 2.0e-5
+lr_scheduler_type: cosine
+warmup_ratio: 0.01                     # per-stage re-warmup
+weight_decay: 0.01
+max_grad_norm: 1.0
+num_train_epochs: 1
+save_strategy: "no"
+save_only_model: true
+logging_steps: 5
+seed: 1234
+dataloader_num_workers: 2
+
+# gradient_accumulation_steps sets the effective batch size and nothing else. It does NOT
+# meaningfully reduce peak VRAM here - static optimizer state dominates - so do not reach
+# for it when something OOMs.
+#
+# num_train_epochs is 1 by hard default and the schema refuses to load anything higher
+# without an explicit override flag. Domain corpora are small relative to a 4B model;
+# multiple epochs at 2e-5 memorize the domain and inflate measured forgetting, which is the
+# quantity under study. If a stage is too small to be a meaningful update, raise its
+# max_tokens in configs/data/m2d2_stages.yaml or merge it with a neighbour.
+
+# ---------------------------------------------------------------------------------------
+# evaluation
+# ---------------------------------------------------------------------------------------
+# Logits for one eval batch are batch x 4096 x 151936. At bf16 that is ~1.2 GB per sequence
+# before the float32 cross-entropy upcast (which perplexity.py chunks). This is the knob to
+# turn down first if the post-stage evaluation OOMs, because ZeRO-2's optimizer state is
+# still resident at that point.
+per_device_eval_batch_size: 2
+eval_baseline: true                    # row 0 of the matrix; required for FWT
+
+# ---------------------------------------------------------------------------------------
+# checkpoint policy - disk is the binding limit
+# ---------------------------------------------------------------------------------------
+runs_dir: ${CPT_RUNS_DIR}
+run_id: null                           # null -> generated, or pass --run-id
+
+# A 4B bf16 checkpoint is ~8 GB; the full curriculum is ~48 GB of stage copies.
+keep_stage_checkpoints: false
+keep_stage_checkpoints_min_free_gb: 40.0
+
+# ---------------------------------------------------------------------------------------
+# wall-clock guard
+# ---------------------------------------------------------------------------------------
+# save_strategy "no" means there is no mid-stage resume: a crash at 80% of a stage loses the
+# stage. That is only tolerable while a stage stays under ~3h. The runner estimates each
+# stage before starting and refuses to begin one over this ceiling unless --allow-long-stage
+# is passed.
+max_stage_hours: 3.0
+
+# A-priori throughput, used only until the first real measurement lands in
+# runs/<run_id>/throughput.json. Derived for Qwen3-4B, full-parameter bf16, ZeRO-2, gradient
+# checkpointing, 2x RTX A6000 over PCIe:
+#   6N FLOPs/token fwd+bwd = 2.4e10, +~33% for checkpointing recompute = ~3.2e10
+#   A6000 bf16 ~150 TFLOP/s peak, ~35% MFU on a PCIe-only link -> ~1,100 tok/s/GPU
+# Measure it once and this number stops mattering.
+assumed_tokens_per_second: 2200.0
+throughput_warmup_steps: 2             # optimizer steps to skip (allocator/compile warmup)
+throughput_measure_steps: 3            # optimizer steps to time
+
+i_understand_multi_epoch_inflates_forgetting: false

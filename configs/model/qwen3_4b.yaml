@@ -1,0 +1,20 @@
+# Base model for continual pre-training.
+#
+# Full-parameter, bf16. No LoRA, no PEFT, no quantization - the point of the experiment is
+# how the *whole* model's distribution over domains shifts, which adapters do not measure.
+
+name_or_path: ${CPT_MODEL_DIR}        # set in .env; a local Qwen3-4B-Base checkout
+tokenizer_path: null                  # null -> same directory as the model
+
+attn_implementation: sdpa
+torch_dtype: bfloat16
+trust_remote_code: false              # Qwen3 is native in transformers; no remote code needed
+use_cache: false                      # KV cache is dead weight in training and fights
+                                      # gradient checkpointing
+
+# Qwen3-4B-Base ships vocab_size=151936. Anything above 65535 forces uint32 packed arrays.
+# tokenize_pack asserts this rather than trusting it.
+expected_min_vocab_size: 65536
+
+# Used by the FSDP2 transformer auto-wrap policy in configs/accel/fsdp2_*.yaml.
+decoder_layer_cls: Qwen3DecoderLayer

@@ -1,0 +1,23 @@
+# Optional local uv settings. Copy to `uv.toml` (gitignored) if you need them.
+#
+# Only reason to bother: relocating uv's package cache. It defaults to ~/.cache/uv, and if
+# that lands on a different filesystem from .venv, uv cannot hardlink and falls back to
+# full copies -- you will see "Failed to hardlink files; falling back to full copy" and the
+# venv will cost several GB more than it should. Putting the cache on the same filesystem
+# as the checkout fixes it.
+#
+# ---------------------------------------------------------------------------------------
+# READ THIS BEFORE COPYING
+# ---------------------------------------------------------------------------------------
+# A uv.toml OVERRIDES THE ENTIRE [tool.uv] SECTION of pyproject.toml. It does not merge.
+# uv warns about it, but the warning is easy to miss and the failure is silent afterwards:
+# without no-build-isolation-package below, `uv add deepspeed` fails, because DeepSpeed is
+# sdist-only and its setup.py imports torch, which an isolated build env does not have.
+#
+# So every setting you want from pyproject.toml's [tool.uv] has to be repeated here.
+# ---------------------------------------------------------------------------------------
+
+cache-dir = "/absolute/path/to/continual-llms/uv_cache"
+
+# Repeated from pyproject.toml [tool.uv]. Do not drop this line.
+no-build-isolation-package = ["deepspeed"]

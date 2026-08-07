@@ -1,0 +1,44 @@
+# DeepSpeed ZeRO stage 3. NOT the default - see configs/accel/ds_zero2.yaml for why.
+# Present for the Task 3 bake-off.
+#
+# ds_zero3.json sets, and must keep setting:
+#
+#   stage3_gather_16bit_weights_on_model_save: true
+#       MANDATORY. Without it, save_only_model writes partitioned shards that
+#       from_pretrained cannot read. This pipeline writes no intermediate checkpoints, so
+#       that failure is unrecoverable: the stage's work is simply gone.
+#   stage3_param_persistence_threshold: 1e5
+#       Parameters smaller than this stay resident instead of being re-gathered - norms,
+#       biases, embeddings' small tensors. Cuts a lot of tiny all-gathers.
+#   overlap_comm: true, contiguous_gradients: true
+#       Overlap the reduce with backward compute, and keep gradients contiguous so the
+#       reduce is one transfer rather than many.
+#
+# Anything that reads weights under stage 3 - the vocab_size assertion, parameter norms -
+# MUST be wrapped in cpt_m2d2.train.common.gathered_parameters(). Outside a gather context
+# model.parameters() returns empty tensors, and a check that reads a partitioned tensor and
+# passes is worse than no check.
+#
+# Launch:
+#   uv run accelerate launch --config_file configs/accel/ds_zero3.yaml \
+#       -m cpt_m2d2.train.cpt --run-id my-run
+
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: DEEPSPEED
+deepspeed_config:
+  deepspeed_config_file: configs/accel/ds_zero3.json
+  zero3_init_flag: true
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

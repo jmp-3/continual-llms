@@ -1,0 +1,48 @@
+# FSDP2, FULL_SHARD. For the Task 3 bake-off. Identical to fsdp2_grad_op.yaml except for
+# fsdp_reshard_after_forward.
+#
+#   fsdp_reshard_after_forward: true  -> parameters are resharded straight after the forward
+#                                        pass and re-gathered in the backward == FULL_SHARD
+#
+# This is the FSDP analogue of ZeRO-3 and carries the same problem on this box: parameters
+# move across the PCIe link on every micro-batch, so gradient_accumulation_steps: 64
+# multiplies the communication instead of amortizing it. Expect it to be the slowest of the
+# four, and to save memory that is not the binding constraint on 48 GB cards.
+#
+# FULL_STATE_DICT is what makes save_only_model produce a checkpoint from_pretrained can
+# read - the FSDP counterpart of ZeRO-3's stage3_gather_16bit_weights_on_model_save. With a
+# sharded state dict and no intermediate checkpoints, a stage's weights would be
+# unrecoverable.
+#
+# Launch:
+#   uv run accelerate launch --config_file configs/accel/fsdp2_full.yaml \
+#       -m cpt_m2d2.train.cpt --run-id my-run
+
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+fsdp_config:
+  fsdp_version: 2
+  fsdp_reshard_after_forward: true
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
+  fsdp_offload_params: false
+  fsdp_activation_checkpointing: false
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_sync_module_states: true
+  fsdp_use_orig_params: true
+  fsdp_forward_prefetch: false
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

@@ -1,0 +1,83 @@
+# =======================================================================================
+# Data. None of this belongs in git, and most of it is not ours to redistribute.
+# =======================================================================================
+
+# M2D2 corpora and their source tarballs. CC BY-NC 4.0 (non-commercial) - fetch it yourself
+# from https://huggingface.co/datasets/machelreid/m2d2 rather than getting it from here.
+/m2d2/
+
+# Packed uint32 token arrays derived from the above. Same license, and regenerable with
+#   uv run python -m cpt_m2d2.data.tokenize_pack
+/data/
+
+# Base model weights and tokenizer, fetched from the Hub. Never vendor these.
+/models/
+
+# Training outputs: checkpoints, ppl_matrix.jsonl, run_config.json, throughput.json.
+/runs/
+
+# =======================================================================================
+# Secrets and machine-specific configuration
+# =======================================================================================
+
+# Absolute paths, device selection, and anywhere a token would end up.
+# Ship .env.example instead.
+.env
+.env.*
+!.env.example
+
+# Local uv settings (absolute cache-dir). Ship uv.toml.example instead.
+# Note: a uv.toml overrides the ENTIRE [tool.uv] section of pyproject.toml.
+uv.toml
+
+# =======================================================================================
+# Environments and caches
+# =======================================================================================
+.venv/
+venv/
+uv_cache/
+hf_cache/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# =======================================================================================
+# Local working notes, reports, and one-off scripts. Deliberately untracked.
+# =======================================================================================
+REPORT_task2.md
+fetch_m2d2.sh
+verify_m2d2.py
+compare_philosophy.py
+gen_manifest.py
+scratch/
+notes/
+
+# =======================================================================================
+# Editors and OS
+# =======================================================================================
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
+
+# =======================================================================================
+# Belt and braces: model weights and packed token arrays must never be committed from
+# anywhere in the tree, whatever a future directory layout looks like.
+# =======================================================================================
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.arrow
+*.tar.gz
+*.tar
+*.zip

@@ -1,0 +1,35 @@
+# DEFAULT sharding config. DeepSpeed ZeRO stage 2.
+#
+# Why stage 2 and not stage 3, so this does not get "optimized" back:
+# ZeRO-3 re-gathers parameters on every micro-batch, so gradient_accumulation_steps: 64 does
+# not amortize its communication - it multiplies it. ZeRO-2 touches the wire once per
+# optimizer step. GPUs 0 and 4 sit on a NODE-level PCIe link with no NVLink, so that is a
+# large difference. ZeRO-3 buys only ~4 GB/GPU here, which is not the binding constraint.
+#
+# Launch:
+#   set -a; source .env; set +a
+#   uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
+#       -m cpt_m2d2.train.cpt --run-id my-run
+#
+# num_processes must match the number of devices in CUDA_VISIBLE_DEVICES (.env: 3,4 for
+# debugging, 0,4 for real runs). GPU 5 must never appear there.
+
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: DEEPSPEED
+deepspeed_config:
+  deepspeed_config_file: configs/accel/ds_zero2.json
+  zero3_init_flag: false
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

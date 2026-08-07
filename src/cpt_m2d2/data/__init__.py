@@ -1,0 +1,1 @@
+"""Data preparation: raw M2D2 text -> packed uint32 token arrays -> torch datasets."""
