@@ -257,9 +257,9 @@ def write_csv(data: MatrixData, path: str | Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     load_env()
-    root = Path(os.environ.get("CPT_ROOT", Path(__file__).resolve().parents[3]))
+    root = Path(os.environ.get("CL_ROOT", Path(__file__).resolve().parents[3]))
 
-    parser = argparse.ArgumentParser(prog="cpt_m2d2.eval.matrix")
+    parser = argparse.ArgumentParser(prog="continual_llms.eval.matrix")
     parser.add_argument("--jsonl", type=Path, required=True, help="runs/<run_id>/ppl_matrix.jsonl")
     parser.add_argument("--out-dir", type=Path, default=None, help="defaults to the jsonl's directory")
     parser.add_argument("--value", choices=["ppl", "nll"], default="ppl")

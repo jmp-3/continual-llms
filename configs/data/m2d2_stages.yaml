@@ -2,8 +2,8 @@
 # in src/ needs to change.
 
 seq_len: 4096
-raw_dir: ${CPT_RAW_DIR}
-packed_dir: ${CPT_PACKED_DIR}
+raw_dir: ${CL_RAW_DIR}
+packed_dir: ${CL_PACKED_DIR}
 train_split: train
 eval_split: valid
 

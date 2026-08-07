@@ -15,13 +15,13 @@
 #       reduce is one transfer rather than many.
 #
 # Anything that reads weights under stage 3 - the vocab_size assertion, parameter norms -
-# MUST be wrapped in cpt_m2d2.train.common.gathered_parameters(). Outside a gather context
+# MUST be wrapped in continual_llms.train.common.gathered_parameters(). Outside a gather context
 # model.parameters() returns empty tensors, and a check that reads a partitioned tensor and
 # passes is worse than no check.
 #
 # Launch:
 #   uv run accelerate launch --config_file configs/accel/ds_zero3.yaml \
-#       -m cpt_m2d2.train.cpt --run-id my-run
+#       -m continual_llms.train.cpt --run-id my-run
 
 compute_environment: LOCAL_MACHINE
 debug: false

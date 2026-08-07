@@ -16,7 +16,7 @@ model-specific except `configs/model/qwen3_4b.yaml`.
 ## What is here
 
 ```
-src/cpt_m2d2/
+src/continual_llms/
 ├─ env.py                  .env loading; must run before torch is imported
 ├─ config.py               pydantic schemas for every YAML (extra="forbid")
 ├─ data/
@@ -44,7 +44,7 @@ Requires [uv](https://docs.astral.sh/uv/) and a CUDA-capable box.
 
 ```bash
 git clone <this repo> continual-llms && cd continual-llms
-cp .env.example .env      # then edit CPT_ROOT and CUDA_VISIBLE_DEVICES
+cp .env.example .env      # then edit CL_ROOT and CUDA_VISIBLE_DEVICES
 uv sync
 ```
 
@@ -71,20 +71,20 @@ uv run python -c "from huggingface_hub import snapshot_download as d; \
 set -a; source .env; set +a
 
 # 1. See what the data looks like and what it would cost. Writes nothing.
-uv run python -m cpt_m2d2.data.tokenize_pack --dry-run
+uv run python -m continual_llms.data.tokenize_pack --dry-run
 
 # 2. Tokenize and pack. Idempotent - reruns skip domains whose meta.json still matches.
-uv run python -m cpt_m2d2.data.tokenize_pack
+uv run python -m continual_llms.data.tokenize_pack
 
 # 3. Check the stage budgets against the real packed counts.
-uv run python -m cpt_m2d2.train.cpt --dry-run
+uv run python -m continual_llms.train.cpt --dry-run
 
 # 4. Train.
 uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
-    -m cpt_m2d2.train.cpt --run-id my-run
+    -m continual_llms.train.cpt --run-id my-run
 
 # 5. Build the matrix.
-uv run python -m cpt_m2d2.eval.matrix --jsonl runs/my-run/ppl_matrix.jsonl
+uv run python -m continual_llms.eval.matrix --jsonl runs/my-run/ppl_matrix.jsonl
 ```
 
 For long curricula, prefer one process per stage — rebuilding a DeepSpeed engine in-process
@@ -93,7 +93,7 @@ works but is the least robust part of the runner:
 ```bash
 for s in s01 s02 s03 s04 s05 s06; do
   uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
-      -m cpt_m2d2.train.cpt --run-id my-run --only-stage "$s" || break
+      -m continual_llms.train.cpt --run-id my-run --only-stage "$s" || break
 done
 ```
 

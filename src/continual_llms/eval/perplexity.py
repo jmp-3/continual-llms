@@ -84,7 +84,7 @@ def evaluate_blocks(
 ) -> PerplexityResult:
     """Mean token NLL of *model* over every block of *blocks*.
 
-    ``blocks`` is a :class:`cpt_m2d2.data.loader.PackedBlockArray`. *model* may be a bare
+    ``blocks`` is a :class:`continual_llms.data.loader.PackedBlockArray`. *model* may be a bare
     ``nn.Module`` or a DeepSpeed engine; under ZeRO-3 the engine's own forward hooks gather
     parameters per layer, so no explicit gather is needed here.
     """
@@ -192,9 +192,9 @@ def evaluate_domains(
 
 def main(argv: list[str] | None = None) -> int:
     load_env()
-    root = Path(os.environ.get("CPT_ROOT", Path(__file__).resolve().parents[3]))
+    root = Path(os.environ.get("CL_ROOT", Path(__file__).resolve().parents[3]))
 
-    parser = argparse.ArgumentParser(prog="cpt_m2d2.eval.perplexity")
+    parser = argparse.ArgumentParser(prog="continual_llms.eval.perplexity")
     parser.add_argument("--model", required=True, help="checkpoint directory to score")
     parser.add_argument("--data-config", type=Path, default=root / "configs/data/m2d2_stages.yaml")
     parser.add_argument("--model-config", type=Path, default=root / "configs/model/qwen3_4b.yaml")

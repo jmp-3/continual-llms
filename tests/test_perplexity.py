@@ -16,8 +16,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from cpt_m2d2.data.loader import PackedBlockArray
-from cpt_m2d2.eval.perplexity import evaluate_blocks
+from continual_llms.data.loader import PackedBlockArray
+from continual_llms.eval.perplexity import evaluate_blocks
 
 SEQ_LEN = 16
 N_BLOCKS = 5
@@ -97,7 +97,7 @@ def test_model_is_left_in_the_state_it_was_found(tiny_model, blocks: PackedBlock
 
 
 def test_eval_cap_limits_blocks(tmp_path: Path):
-    from cpt_m2d2.data.loader import load_eval_blocks
+    from continual_llms.data.loader import load_eval_blocks
 
     rng = np.random.default_rng(1)
     directory = tmp_path / "packed" / "Domain"

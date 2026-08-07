@@ -40,7 +40,7 @@ _NOT_IMPLEMENTED = (
     "SFT is out of scope for Task 2 and is intentionally not implemented.\n"
     "Intended path: trl.SFTTrainer + tokenizer.apply_chat_template + completion-only loss "
     "masking, launched with the same configs/accel/*.yaml used for CPT.\n"
-    "See the module docstring in src/cpt_m2d2/train/sft.py."
+    "See the module docstring in src/continual_llms/train/sft.py."
 )
 
 
@@ -63,8 +63,8 @@ def load_cpt_checkpoint(checkpoint_dir: str | Path, base_model_dir: str | Path) 
 
 def main(argv: list[str] | None = None) -> int:
     load_env()
-    root = Path(os.environ.get("CPT_ROOT", Path(__file__).resolve().parents[3]))
-    parser = argparse.ArgumentParser(prog="cpt_m2d2.train.sft", description=__doc__)
+    root = Path(os.environ.get("CL_ROOT", Path(__file__).resolve().parents[3]))
+    parser = argparse.ArgumentParser(prog="continual_llms.train.sft", description=__doc__)
     parser.add_argument("--sft-config", type=Path, default=root / "configs/train/sft_base.yaml")
     parser.add_argument("--checkpoint", type=Path, default=None)
     args = parser.parse_args(argv)

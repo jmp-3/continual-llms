@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cpt_m2d2.config import (
+from continual_llms.config import (
     CPTTrainConfig,
     DataConfig,
     ModelConfig,
@@ -17,7 +17,7 @@ from cpt_m2d2.config import (
     load_config,
 )
 
-ROOT = Path(os.environ.get("CPT_ROOT", Path(__file__).resolve().parents[1]))
+ROOT = Path(os.environ.get("CL_ROOT", Path(__file__).resolve().parents[1]))
 CONFIGS = ROOT / "configs"
 
 

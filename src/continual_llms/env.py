@@ -13,14 +13,14 @@ import os
 import re
 from pathlib import Path
 
-__all__ = ["load_env", "find_dotenv", "cpt_root", "env_path", "expand"]
+__all__ = ["load_env", "find_dotenv", "cl_root", "env_path", "expand"]
 
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def find_dotenv(start: Path | str | None = None) -> Path | None:
-    """Walk upwards from *start* looking for a ``.env``. Honours ``$CPT_ROOT`` first."""
-    root = os.environ.get("CPT_ROOT")
+    """Walk upwards from *start* looking for a ``.env``. Honours ``$CL_ROOT`` first."""
+    root = os.environ.get("CL_ROOT")
     if root and (Path(root) / ".env").is_file():
         return Path(root) / ".env"
     here = Path(start) if start is not None else Path(__file__).resolve()
@@ -79,12 +79,12 @@ def env_path(name: str, default: str | None = None) -> Path:
     value = os.environ.get(name, default)
     if value is None:
         raise KeyError(
-            f"{name} is not set. Source the project .env, or call cpt_m2d2.env.load_env() "
+            f"{name} is not set. Source the project .env, or call continual_llms.env.load_env() "
             "before reading configuration."
         )
     return Path(value)
 
 
-def cpt_root() -> Path:
+def cl_root() -> Path:
     load_env()
-    return env_path("CPT_ROOT")
+    return env_path("CL_ROOT")

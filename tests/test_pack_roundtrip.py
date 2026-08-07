@@ -13,8 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cpt_m2d2.data.loader import PackedBlockArray, build_stage_dataset
-from cpt_m2d2.data.tokenize_pack import (
+from continual_llms.data.loader import PackedBlockArray, build_stage_dataset
+from continual_llms.data.tokenize_pack import (
     PACKED_DTYPE,
     detect_blank_delimiter,
     discover_domains,

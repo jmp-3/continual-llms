@@ -3,7 +3,7 @@
 # Full-parameter, bf16. No LoRA, no PEFT, no quantization - the point of the experiment is
 # how the *whole* model's distribution over domains shifts, which adapters do not measure.
 
-name_or_path: ${CPT_MODEL_DIR}        # set in .env; a local Qwen3-4B-Base checkout
+name_or_path: ${CL_MODEL_DIR}        # set in .env; a local Qwen3-4B-Base checkout
 tokenizer_path: null                  # null -> same directory as the model
 
 attn_implementation: sdpa

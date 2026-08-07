@@ -1,6 +1,6 @@
 """The CPT output's tokenizer must be byte-identical to the base model's.
 
-The SFT phase depends on this (see ``cpt_m2d2.train.sft``), and so does every number in the
+The SFT phase depends on this (see ``continual_llms.train.sft``), and so does every number in the
 perplexity matrix: the packed ``.bin`` files, the checkpoints, and the eval sets all have to
 agree on what a token id means. A tokenizer that merely *behaves* the same after a
 re-serialization is not good enough to assume.
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from cpt_m2d2.train.common import (
+from continual_llms.train.common import (
     assert_tokenizer_identical,
     copy_tokenizer_files,
     file_sha256,
@@ -52,7 +52,7 @@ def test_missing_tokenizer_is_detected(base_model_dir: Path, tmp_path: Path):
 @pytest.mark.parametrize("subdir", ["final", "current"])
 def test_real_run_outputs_if_present(base_model_dir: Path, subdir: str):
     """If a real run exists on this box, hold its output to the same standard."""
-    runs = Path(os.environ.get("CPT_RUNS_DIR", ""))
+    runs = Path(os.environ.get("CL_RUNS_DIR", ""))
     if not runs.is_dir():
         pytest.skip("no runs directory yet")
     candidates = sorted(p for p in runs.glob(f"*/{subdir}") if (p / "config.json").is_file())
@@ -64,7 +64,7 @@ def test_real_run_outputs_if_present(base_model_dir: Path, subdir: str):
 
 def test_sft_stub_refuses_but_validates_first(base_model_dir: Path, tmp_path: Path):
     """The stub must validate the checkpoint before raising, or the error is useless."""
-    from cpt_m2d2.train.sft import load_cpt_checkpoint
+    from continual_llms.train.sft import load_cpt_checkpoint
 
     missing = tmp_path / "nope"
     with pytest.raises(FileNotFoundError):

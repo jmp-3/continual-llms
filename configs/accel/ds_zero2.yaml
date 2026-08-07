@@ -9,7 +9,7 @@
 # Launch:
 #   set -a; source .env; set +a
 #   uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
-#       -m cpt_m2d2.train.cpt --run-id my-run
+#       -m continual_llms.train.cpt --run-id my-run
 #
 # num_processes must match the number of devices in CUDA_VISIBLE_DEVICES (.env: 3,4 for
 # debugging, 0,4 for real runs). GPU 5 must never appear there.

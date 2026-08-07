@@ -9,16 +9,16 @@ from pathlib import Path
 import pytest
 
 MODULES = [
-    "cpt_m2d2",
-    "cpt_m2d2.env",
-    "cpt_m2d2.config",
-    "cpt_m2d2.data.tokenize_pack",
-    "cpt_m2d2.data.loader",
-    "cpt_m2d2.train.common",
-    "cpt_m2d2.train.cpt",
-    "cpt_m2d2.train.sft",
-    "cpt_m2d2.eval.perplexity",
-    "cpt_m2d2.eval.matrix",
+    "continual_llms",
+    "continual_llms.env",
+    "continual_llms.config",
+    "continual_llms.data.tokenize_pack",
+    "continual_llms.data.loader",
+    "continual_llms.train.common",
+    "continual_llms.train.cpt",
+    "continual_llms.train.sft",
+    "continual_llms.eval.perplexity",
+    "continual_llms.eval.matrix",
 ]
 
 
@@ -28,33 +28,33 @@ def test_module_imports(name: str):
 
 
 def test_entry_points_have_a_parser():
-    for name in ["cpt_m2d2.data.tokenize_pack", "cpt_m2d2.train.cpt", "cpt_m2d2.eval.perplexity",
-                 "cpt_m2d2.eval.matrix", "cpt_m2d2.train.sft"]:
+    for name in ["continual_llms.data.tokenize_pack", "continual_llms.train.cpt", "continual_llms.eval.perplexity",
+                 "continual_llms.eval.matrix", "continual_llms.train.sft"]:
         assert hasattr(importlib.import_module(name), "main"), name
 
 
 def test_env_loading_expands_and_does_not_override():
     import os
 
-    from cpt_m2d2.env import load_env
+    from continual_llms.env import load_env
 
     parsed = load_env()
-    assert parsed["CPT_ROOT"]
-    assert parsed["HF_HOME"].startswith(parsed["CPT_ROOT"])
+    assert parsed["CL_ROOT"]
+    assert parsed["HF_HOME"].startswith(parsed["CL_ROOT"])
     assert "${" not in parsed["HF_HOME"]
-    assert os.environ["CPT_ROOT"] == parsed["CPT_ROOT"]
+    assert os.environ["CL_ROOT"] == parsed["CL_ROOT"]
 
 
 def test_cuda_visible_devices_never_names_gpu5():
     """GPU 5 is off limits on this box."""
-    from cpt_m2d2.env import load_env
+    from continual_llms.env import load_env
 
     devices = load_env().get("CUDA_VISIBLE_DEVICES", "")
     assert "5" not in [d.strip() for d in devices.split(",") if d.strip()]
 
 
 def test_append_jsonl_is_durable_and_appends(tmp_path: Path):
-    from cpt_m2d2.train.common import append_jsonl_fsync
+    from continual_llms.train.common import append_jsonl_fsync
 
     path = tmp_path / "ppl_matrix.jsonl"
     append_jsonl_fsync(path, {"stage_index": 0, "domain": "A"})
@@ -65,7 +65,7 @@ def test_append_jsonl_is_durable_and_appends(tmp_path: Path):
 
 
 def test_atomic_swap_replaces_and_removes_the_old_checkpoint(tmp_path: Path):
-    from cpt_m2d2.train.common import atomic_replace_dir
+    from continual_llms.train.common import atomic_replace_dir
 
     run = tmp_path / "run"
     (run / "current").mkdir(parents=True)
@@ -81,7 +81,7 @@ def test_atomic_swap_replaces_and_removes_the_old_checkpoint(tmp_path: Path):
 
 
 def test_rmtree_refuses_to_escape_the_run_directory(tmp_path: Path):
-    from cpt_m2d2.train.common import rmtree_within
+    from continual_llms.train.common import rmtree_within
 
     run = tmp_path / "run"
     outside = tmp_path / "outside"
@@ -99,7 +99,7 @@ def test_rmtree_refuses_to_escape_the_run_directory(tmp_path: Path):
 def test_gathered_parameters_is_a_noop_without_deepspeed():
     import torch
 
-    from cpt_m2d2.train.common import gathered_parameters
+    from continual_llms.train.common import gathered_parameters
 
     layer = torch.nn.Linear(4, 4)
     with gathered_parameters(layer, [layer.weight]):
@@ -107,7 +107,7 @@ def test_gathered_parameters_is_a_noop_without_deepspeed():
 
 
 def test_stage_too_long_error_exists():
-    from cpt_m2d2.train.cpt import StageTooLongError, format_hours
+    from continual_llms.train.cpt import StageTooLongError, format_hours
 
     assert issubclass(StageTooLongError, RuntimeError)
     assert format_hours(1.5).startswith("1.50h")

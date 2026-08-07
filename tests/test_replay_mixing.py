@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cpt_m2d2.data.loader import build_stage_dataset
+from continual_llms.data.loader import build_stage_dataset
 
 SEQ_LEN = 8
 

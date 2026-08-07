@@ -7,7 +7,7 @@ Run it under ``accelerate launch`` with one of ``configs/accel/*.yaml``::
 
     set -a; source .env; set +a
     uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \\
-        -m cpt_m2d2.train.cpt --run-id my-run
+        -m continual_llms.train.cpt --run-id my-run
 
 Checkpoint policy (hard constraint - disk is the binding limit)
 --------------------------------------------------------------
@@ -575,7 +575,7 @@ def run_baseline_eval(
 
 def build_parser(root: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="cpt_m2d2.train.cpt",
+        prog="continual_llms.train.cpt",
         description="Sequential per-domain continual pre-training over M2D2.",
     )
     parser.add_argument("--data-config", type=Path, default=root / "configs/data/m2d2_stages.yaml")
@@ -602,7 +602,7 @@ def build_parser(root: Path) -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     load_env()  # must precede any torch import: CUDA_VISIBLE_DEVICES is read once
-    root = Path(os.environ.get("CPT_ROOT", Path(__file__).resolve().parents[3]))
+    root = Path(os.environ.get("CL_ROOT", Path(__file__).resolve().parents[3]))
     args = build_parser(root).parse_args(argv)
 
     from ..config import CPTTrainConfig, DataConfig, ModelConfig, load_config
@@ -626,7 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not eval_domains:
         logger.error(
-            "no packed eval sets under %s. Run `uv run python -m cpt_m2d2.data.tokenize_pack` first.",
+            "no packed eval sets under %s. Run `uv run python -m continual_llms.data.tokenize_pack` first.",
             data_cfg.packed_dir,
         )
         return 2
@@ -757,7 +757,7 @@ def main(argv: list[str] | None = None) -> int:
                 o.name, o.domain, f"{o.train_tokens:,}", o.tokens_per_second,
                 format_hours(o.train_seconds / 3600), o.eval_seconds, o.free_gb_after,
             )
-        logger.info("build the matrix: uv run python -m cpt_m2d2.eval.matrix --jsonl %s", matrix_path)
+        logger.info("build the matrix: uv run python -m continual_llms.eval.matrix --jsonl %s", matrix_path)
     return 0
 
 

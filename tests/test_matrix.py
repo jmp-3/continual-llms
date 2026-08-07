@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cpt_m2d2.eval.matrix import compute_metrics, load_matrix, render_markdown, write_csv
+from continual_llms.eval.matrix import compute_metrics, load_matrix, render_markdown, write_csv
 
 
 def _row(stage_index, stage_name, stage_domain, domain, nll):

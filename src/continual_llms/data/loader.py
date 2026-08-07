@@ -70,7 +70,7 @@ class PackedBlockArray:
         if not self.bin_path.is_file():
             raise FileNotFoundError(
                 f"{self.bin_path} does not exist. Run "
-                "`uv run python -m cpt_m2d2.data.tokenize_pack` first."
+                "`uv run python -m continual_llms.data.tokenize_pack` first."
             )
         meta_path = self.bin_path.with_suffix(".meta.json")
         self.meta = meta or (PackedMeta.load(meta_path) if meta_path.is_file() else None)

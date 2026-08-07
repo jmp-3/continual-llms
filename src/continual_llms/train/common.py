@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-LOGGER_NAME = "cpt_m2d2"
+LOGGER_NAME = "continual_llms"
 
 TOKENIZER_FILES = (
     "tokenizer.json",

@@ -16,7 +16,7 @@
 #
 # Launch:
 #   uv run accelerate launch --config_file configs/accel/fsdp2_grad_op.yaml \
-#       -m cpt_m2d2.train.cpt --run-id my-run
+#       -m continual_llms.train.cpt --run-id my-run
 
 compute_environment: LOCAL_MACHINE
 debug: false

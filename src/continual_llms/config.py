@@ -94,8 +94,8 @@ class DataConfig(_Base):
     """``configs/data/m2d2_stages.yaml``."""
 
     seq_len: int = Field(default=4096, gt=0)
-    raw_dir: str = "${CPT_RAW_DIR}"
-    packed_dir: str = "${CPT_PACKED_DIR}"
+    raw_dir: str = "${CL_RAW_DIR}"
+    packed_dir: str = "${CL_PACKED_DIR}"
     train_split: str = "train"
     eval_split: str = "valid"
     stages: list[StageSpec]
@@ -176,7 +176,7 @@ class CPTTrainConfig(_Base):
     dataloader_num_workers: int = 2
 
     # --- pipeline policy ---------------------------------------------------------------
-    runs_dir: str = "${CPT_RUNS_DIR}"
+    runs_dir: str = "${CL_RUNS_DIR}"
     run_id: str | None = None
     #: Copy each stage's weights to ``runs/<run_id>/stage_<n>/`` after the atomic swap.
     #: ~8 GB per stage for a 4B bf16 model.
@@ -221,10 +221,10 @@ class CPTTrainConfig(_Base):
 
 
 class SFTTrainConfig(_Base):
-    """``configs/train/sft_base.yaml`` — stub. See ``cpt_m2d2.train.sft``."""
+    """``configs/train/sft_base.yaml`` — stub. See ``continual_llms.train.sft``."""
 
-    cpt_checkpoint: str = "${CPT_RUNS_DIR}/latest/final"
-    base_model_for_tokenizer_check: str = "${CPT_MODEL_DIR}"
+    cpt_checkpoint: str = "${CL_RUNS_DIR}/latest/final"
+    base_model_for_tokenizer_check: str = "${CL_MODEL_DIR}"
     dataset: str | None = None
     chat_template: str | None = None
     completion_only_loss: bool = True

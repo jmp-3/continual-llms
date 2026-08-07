@@ -43,7 +43,7 @@ eval_baseline: true                    # row 0 of the matrix; required for FWT
 # ---------------------------------------------------------------------------------------
 # checkpoint policy - disk is the binding limit
 # ---------------------------------------------------------------------------------------
-runs_dir: ${CPT_RUNS_DIR}
+runs_dir: ${CL_RUNS_DIR}
 run_id: null                           # null -> generated, or pass --run-id
 
 # A 4B bf16 checkpoint is ~8 GB; the full curriculum is ~48 GB of stage copies.

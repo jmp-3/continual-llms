@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cpt_m2d2.env import load_env
+from continual_llms.env import load_env
 
 load_env()
 
@@ -34,9 +34,9 @@ def _write_corpus(directory: Path, docs: list[str], *, blank_lines: int = 2) -> 
 
 @pytest.fixture(scope="session")
 def base_model_dir() -> Path:
-    path = Path(os.environ.get("CPT_MODEL_DIR", ""))
+    path = Path(os.environ.get("CL_MODEL_DIR", ""))
     if not (path / "tokenizer.json").is_file():
-        pytest.skip(f"no tokenizer at CPT_MODEL_DIR={path}")
+        pytest.skip(f"no tokenizer at CL_MODEL_DIR={path}")
     return path
 
 

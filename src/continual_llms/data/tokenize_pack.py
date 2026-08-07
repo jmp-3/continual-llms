@@ -19,8 +19,8 @@ a full ``seq_len`` of real tokens and the loader needs no mask.
 
 Entry point::
 
-    uv run python -m cpt_m2d2.data.tokenize_pack --dry-run
-    uv run python -m cpt_m2d2.data.tokenize_pack
+    uv run python -m continual_llms.data.tokenize_pack --dry-run
+    uv run python -m continual_llms.data.tokenize_pack
 """
 
 from __future__ import annotations
@@ -505,10 +505,10 @@ def _human(n: float) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     load_env()
-    root = Path(os.environ.get("CPT_ROOT", Path(__file__).resolve().parents[3]))
+    root = Path(os.environ.get("CL_ROOT", Path(__file__).resolve().parents[3]))
 
     parser = argparse.ArgumentParser(
-        prog="cpt_m2d2.data.tokenize_pack",
+        prog="continual_llms.data.tokenize_pack",
         description="Tokenize and pack M2D2 domains into uint32 block arrays.",
     )
     parser.add_argument("--data-config", type=Path, default=root / "configs/data/m2d2_stages.yaml")
