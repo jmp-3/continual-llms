@@ -7,7 +7,7 @@
 /m2d2/
 
 # Packed uint32 token arrays derived from the above. Same license, and regenerable with
-#   uv run python -m cpt_m2d2.data.tokenize_pack
+#   uv run python -m continual_llms.data.tokenize_pack
 /data/
 
 # Base model weights and tokenizer, fetched from the Hub. Never vendor these.
@@ -15,6 +15,14 @@
 
 # Training outputs: checkpoints, ppl_matrix.jsonl, run_config.json, throughput.json.
 /runs/
+
+# Generated short-run configs and throwaway checkpoints from scripts/00_smoke.sh and
+# scripts/01_bakeoff.sh. Inside the project rather than /tmp because a checkpoint is ~8 GB.
+/.scratch/
+
+# Throughput measured by scripts/00_smoke.sh; seeded into runs/<id>/throughput.json so
+# scripts/02_run_cpt.sh estimates stage wall time from a real number. Machine-specific.
+/.smoke_throughput.json
 
 # =======================================================================================
 # Secrets and machine-specific configuration
@@ -51,6 +59,7 @@ dist/
 # Local working notes, reports, and one-off scripts. Deliberately untracked.
 # =======================================================================================
 REPORT_task2.md
+REPORT_task3.md
 fetch_m2d2.sh
 verify_m2d2.py
 compare_philosophy.py
