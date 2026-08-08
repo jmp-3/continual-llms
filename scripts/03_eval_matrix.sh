@@ -20,7 +20,9 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-source "$PROJECT_ROOT/.env"
+# set -a so the values reach child processes. Without it `source` sets shell variables
+# only, and `accelerate launch` would see no CUDA_VISIBLE_DEVICES and no HF_HOME.
+set -a; source "$PROJECT_ROOT/.env"; set +a
 [[ "${CL_ROOT:-}" == "$PROJECT_ROOT" ]] || { echo "FATAL: .env root mismatch (CL_ROOT=${CL_ROOT:-unset})"; exit 1; }
 source "$PROJECT_ROOT/scripts/_common.sh"
 

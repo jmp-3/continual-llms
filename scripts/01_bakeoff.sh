@@ -11,17 +11,20 @@
 # checks for full-shape tensors and a matching vocab_size. A failure disqualifies ZeRO-3 in
 # the results table; no attempt is made to repair the shards.
 #
-# NOTE ON DURATION. At accum 64 one optimizer step is 524,288 tokens, so the default
-# --steps 50 is ~26.2 M tokens per arm: roughly 3.3 h/arm and 13 h for all four at the
-# assumed 2,200 tok/s. Throughput stabilises within a handful of steps; --steps 8 gives the
-# same ranking in about a tenth of the time. The default is 50 because that is the spec.
+# NOTE ON DURATION. At accum 64 one optimizer step is 524,288 tokens, so steps are
+# expensive: ~0.5 h/arm at --steps 8, and ~3.3 h/arm (13 h for all four) at --steps 50.
+# Throughput is measured over a warmup+measure window of 5 optimizer steps, so 8 is enough
+# to rank the arms; 50 buys precision the ranking does not need. The default is therefore 8.
+# Re-run with --steps 50 if two arms land inside the 10% band and the tie matters.
 #
 #   ./scripts/01_bakeoff.sh [--dry-run] [--steps N] [--arms a,b,c] [--tag NAME] [--keep]
 #
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-source "$PROJECT_ROOT/.env"
+# set -a so the values reach child processes. Without it `source` sets shell variables
+# only, and `accelerate launch` would see no CUDA_VISIBLE_DEVICES and no HF_HOME.
+set -a; source "$PROJECT_ROOT/.env"; set +a
 [[ "${CL_ROOT:-}" == "$PROJECT_ROOT" ]] || { echo "FATAL: .env root mismatch (CL_ROOT=${CL_ROOT:-unset})"; exit 1; }
 source "$PROJECT_ROOT/scripts/_common.sh"
 
@@ -30,7 +33,7 @@ source "$PROJECT_ROOT/scripts/_common.sh"
 # --------------------------------------------------------------------------------------
 
 DRY_RUN=0
-STEPS=50
+STEPS=8
 TAG=bakeoff
 KEEP=0
 ARMS_CSV="ds_zero2,ds_zero3,fsdp2_grad_op,fsdp2_full"

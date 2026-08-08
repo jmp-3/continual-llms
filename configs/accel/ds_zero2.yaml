@@ -3,16 +3,18 @@
 # Why stage 2 and not stage 3, so this does not get "optimized" back:
 # ZeRO-3 re-gathers parameters on every micro-batch, so gradient_accumulation_steps: 64 does
 # not amortize its communication - it multiplies it. ZeRO-2 touches the wire once per
-# optimizer step. GPUs 0 and 4 sit on a NODE-level PCIe link with no NVLink, so that is a
-# large difference. ZeRO-3 buys only ~4 GB/GPU here, which is not the binding constraint.
+# optimizer step. GPUs 0 and 2 sit on a PXB PCIe link with no NVLink, so that is a real
+# difference - smaller than it was on the older 0,4 pair, which was NODE and also crossed
+# the PCIe host bridge, but still a difference. ZeRO-3 buys only ~4 GB/GPU here, which is
+# not the binding constraint. scripts/01_bakeoff.sh is what settles this on real numbers.
 #
 # Launch:
 #   set -a; source .env; set +a
 #   uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
 #       -m continual_llms.train.cpt --run-id my-run
 #
-# num_processes must match the number of devices in CUDA_VISIBLE_DEVICES (.env: 3,4 for
-# debugging, 0,4 for real runs). GPU 5 must never appear there.
+# num_processes must match the number of devices in CUDA_VISIBLE_DEVICES (.env: 0,2).
+# GPU 5 must never appear there.
 
 compute_environment: LOCAL_MACHINE
 debug: false

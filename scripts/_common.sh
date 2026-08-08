@@ -18,9 +18,23 @@
 
 CL_DISK_MOUNT="$PROJECT_ROOT"
 CL_MIN_FREE_GB=40
-CL_REQUIRED_DEVICES="0,4"         # GPU 5 is off limits and must never appear
 CL_VRAM_LIMIT_GB=44               # RTX A6000 is 48 GB; 44 leaves headroom for fragmentation
-CL_NUMA_NODE=0                    # GPUs 0 and 4 are both on NUMA 0
+
+# The GPU pair, as physical device ids. Single source of truth: the device assertion, the
+# preflight idle check, and both nvidia-smi samplers all read it. GPU 5 is off limits and
+# must never appear (it is also the only card on the other socket - see CL_NUMA_NODE).
+#
+#
+# 0,2 is a PXB pair (multiple PCIe bridges, no host bridge). 0,4 was NODE, which also
+# traverses the PCIe host bridge, so 0,2 has the shorter path between ranks. Neither pair
+# has NVLink.
+CL_REQUIRED_DEVICES="0,2"
+CL_FORBIDDEN_DEVICE=5
+
+# Every allowed GPU is on this NUMA node, so binding avoids cross-socket memory traffic.
+# cl_assert_numa() checks that at runtime rather than trusting this comment: --membind to
+# the wrong node is worse than not binding at all.
+CL_NUMA_NODE=0
 
 # numactl prefix, used as an array so quoting survives.
 CL_NUMACTL=(numactl --cpunodebind="$CL_NUMA_NODE" --membind="$CL_NUMA_NODE")
@@ -70,11 +84,28 @@ cl_assert_env_names() {
 
 cl_assert_devices() {
     local have="${CUDA_VISIBLE_DEVICES:-unset}"
-    if [[ "$have" == *5* ]]; then
-        cl_die "CUDA_VISIBLE_DEVICES=$have contains GPU 5, which is off limits."
+    if [[ ",$have," == *",$CL_FORBIDDEN_DEVICE,"* ]]; then
+        cl_die "CUDA_VISIBLE_DEVICES=$have contains GPU $CL_FORBIDDEN_DEVICE, which is off limits."
     fi
     [[ "$have" == "$CL_REQUIRED_DEVICES" ]] || cl_die \
         "CUDA_VISIBLE_DEVICES=$have, expected $CL_REQUIRED_DEVICES. Fix .env; do not override inline."
+}
+
+# --membind to a node the GPUs are not on is worse than not binding at all, so verify the
+# topology instead of trusting the comment on CL_NUMA_NODE. In `nvidia-smi topo -m` the NUMA
+# affinity is the second-to-last column, which keeps this robust to the GPU count.
+cl_assert_numa() {
+    local topo idx node
+    topo=$(nvidia-smi topo -m 2>/dev/null) || { cl_info "numa: nvidia-smi topo unavailable, skipping"; return 0; }
+    for idx in ${CL_REQUIRED_DEVICES//,/ }; do
+        node=$(awk -v g="GPU$idx" '$1 == g { print $(NF-1) }' <<< "$topo" | head -1)
+        [[ -n "$node" ]] || { cl_info "numa: no topology row for GPU$idx, skipping"; return 0; }
+        [[ "$node" == "$CL_NUMA_NODE" ]] || cl_die \
+            "GPU$idx is on NUMA node $node but CL_NUMA_NODE=$CL_NUMA_NODE. Binding memory to the
+       wrong socket is worse than not binding. Either pick GPUs on one node or update
+       CL_NUMA_NODE in scripts/_common.sh."
+    done
+    cl_info "numa ok: GPUs $CL_REQUIRED_DEVICES are all on NUMA node $CL_NUMA_NODE"
 }
 
 # Catches a broken package rename in seconds rather than 40 minutes into a run.
@@ -99,10 +130,11 @@ cl_check_disk() {
     cl_info "disk ok: ${free} GB free on $CL_DISK_MOUNT${where:+ [$where]}"
 }
 
-# Refuse to start if somebody else is already computing on GPU 0 or 4.
+# Refuse to start if somebody else is already computing on one of our GPUs.
 cl_assert_gpus_idle() {
-    local -A index_of=()
+    local -A index_of=() wanted=()
     local line idx uuid pid busy=""
+    for idx in ${CL_REQUIRED_DEVICES//,/ }; do wanted["$idx"]=1; done
     while IFS= read -r line; do
         idx=${line%%,*}; uuid=${line#*, }
         index_of["$uuid"]=$idx
@@ -112,19 +144,20 @@ cl_assert_gpus_idle() {
         [[ -z "$line" ]] && continue
         uuid=${line%%,*}; pid=${line#*, }
         idx=${index_of["$uuid"]:-?}
-        if [[ "$idx" == "0" || "$idx" == "4" ]]; then
+        if [[ -n "${wanted[$idx]:-}" ]]; then
             busy+=" gpu${idx}:pid${pid}"
         fi
     done < <(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader)
 
-    [[ -z "$busy" ]] || cl_die "GPU 0 or 4 already in use ->${busy}. Wait, or kill those processes."
-    cl_info "preflight ok: GPUs 0 and 4 are idle"
+    [[ -z "$busy" ]] || cl_die "GPU $CL_REQUIRED_DEVICES already in use ->${busy}. Wait, or kill those processes."
+    cl_info "preflight ok: GPUs $CL_REQUIRED_DEVICES are idle"
 }
 
 # Everything except the GPU-busy check, which a --dry-run has no business enforcing.
 cl_preflight_light() {
     cl_assert_env_names
     cl_assert_devices
+    cl_assert_numa
     cl_assert_package
     cl_check_disk "start"
 }
@@ -166,7 +199,7 @@ cl_sampler_start() {
     CL_SAMPLE_CSV="${1:-$(mktemp)}"
     : > "$CL_SAMPLE_CSV"
     nvidia-smi --query-gpu=index,memory.used,utilization.gpu \
-        --format=csv,noheader,nounits -i 0,4 -l 1 >> "$CL_SAMPLE_CSV" 2>/dev/null &
+        --format=csv,noheader,nounits -i "$CL_REQUIRED_DEVICES" -l 1 >> "$CL_SAMPLE_CSV" 2>/dev/null &
     CL_SAMPLER_PID=$!
 }
 
@@ -179,7 +212,7 @@ cl_sampler_stop() {
 
 cl_dmon_start() {
     CL_DMON_LOG="$1"
-    nvidia-smi dmon -s u -i 0,4 -d 1 > "$CL_DMON_LOG" 2>/dev/null &
+    nvidia-smi dmon -s u -i "$CL_REQUIRED_DEVICES" -d 1 > "$CL_DMON_LOG" 2>/dev/null &
     CL_DMON_PID=$!
 }
 
