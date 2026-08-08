@@ -9,7 +9,16 @@
 # Nothing lands in runs/ except the log: training output goes to .scratch/ and is removed
 # on success. The measured throughput is copied to $PROJECT_ROOT/.smoke_throughput.json.
 #
-#   ./scripts/00_smoke.sh [--dry-run] [--steps N] [--accel NAME] [--domain NAME] [--keep]
+#   ./scripts/00_smoke.sh [--dry-run] [--steps N] [--accel NAME] [--domain NAME]
+#                         [--accum N] [--batch-size N] [--eval-batch-size N] [--keep]
+#
+# --accum lowers gradient_accumulation_steps from the production 64. One step is 524,288
+# tokens at 64, which is more than some small domains hold in total, so a minimal plumbing
+# test needs a smaller step. It barely moves peak VRAM - static optimizer state dominates.
+#
+# --batch-size is the knob that DOES move peak VRAM, since activations scale with it. Raise
+# it and lower --accum by the same factor to hold tokens/optimizer step constant, which
+# keeps the effective batch and the learning-rate schedule unchanged.
 #
 set -euo pipefail
 
@@ -28,9 +37,12 @@ DRY_RUN=0
 STEPS=2
 ACCEL=ds_zero2
 DOMAIN=""
+ACCUM=""
+BATCH_SIZE=""
+EVAL_BATCH_SIZE=""
 KEEP=0
 
-usage() { sed -n '2,14p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '2,19p' "$0"; exit "${1:-0}"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,6 +50,9 @@ while [[ $# -gt 0 ]]; do
         --steps)   STEPS="$2"; shift 2 ;;
         --accel)   ACCEL="$2"; shift 2 ;;
         --domain)  DOMAIN="$2"; shift 2 ;;
+        --accum)   ACCUM="$2"; shift 2 ;;
+        --batch-size)      BATCH_SIZE="$2"; shift 2 ;;
+        --eval-batch-size) EVAL_BATCH_SIZE="$2"; shift 2 ;;
         --keep)    KEEP=1; shift ;;
         -h|--help) usage 0 ;;
         *) echo "unknown argument: $1" >&2; usage 1 ;;
@@ -72,7 +87,10 @@ MKCONFIG_OUT=$(cd "$PROJECT_ROOT" && uv run python scripts/_mkconfig.py \
     --steps      "$STEPS" \
     --runs-dir   "$SMOKE_RUNS_DIR" \
     --eval-max-tokens 200000 \
-    ${DOMAIN:+--domain "$DOMAIN"})
+    ${DOMAIN:+--domain "$DOMAIN"} \
+    ${ACCUM:+--accum "$ACCUM"} \
+    ${BATCH_SIZE:+--batch-size "$BATCH_SIZE"} \
+    ${EVAL_BATCH_SIZE:+--eval-batch-size "$EVAL_BATCH_SIZE"})
 eval "$MKCONFIG_OUT"
 
 CMD=(
@@ -89,6 +107,7 @@ if (( DRY_RUN )); then
     echo "run_id            : $RUN_ID"
     echo "accel config      : $ACCEL_CONFIG"
     echo "domain            : $DOMAIN"
+    echo "batch x accum     : $BATCH_SIZE x $ACCUM  (eval batch $EVAL_BATCH_SIZE)"
     echo "optimizer steps   : $STEPS"
     echo "tokens/step       : $TOKENS_PER_STEP"
     echo "stage max_tokens  : $STAGE_MAX_TOKENS"
@@ -108,6 +127,7 @@ fi
 # --------------------------------------------------------------------------------------
 
 cl_assert_gpus_idle
+cl_assert_nccl
 cl_setup_logging 00_smoke "$RUN_ID"
 trap cl_on_exit EXIT
 
@@ -143,9 +163,14 @@ cl_report_vram
 echo "VRAM ceiling   : ${CL_VRAM_LIMIT_GB} GiB"
 
 awk -v p="$PEAK_GB" -v lim="$CL_VRAM_LIMIT_GB" 'BEGIN { exit !(p < lim) }' \
-    || cl_die "peak VRAM ${PEAK_GB} GiB exceeds the ${CL_VRAM_LIMIT_GB} GiB ceiling. Stop and
-       reduce per_device_eval_batch_size (evaluation peaks while ZeRO-2 optimizer state is
-       still resident) before running anything longer."
+    || cl_die "peak VRAM ${PEAK_GB} GiB exceeds the ${CL_VRAM_LIMIT_GB} GiB ceiling.
+       Do not raise the ceiling to get past this: there are no mid-stage checkpoints, so one
+       failed allocation two hours into a stage loses the whole stage. Get headroom first:
+         --eval-batch-size 1                      halves the eval logits, no numerics change
+         PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   reclaims fragmentation
+         offload_optimizer device cpu in configs/accel/ds_zero*.json  frees ~24 GB/GPU
+       Check the log for 'allocator cache flushes' - that means it only survived by
+       thrashing, which is both slow and fragile."
 echo "VRAM check     : PASS (${PEAK_GB} GiB < ${CL_VRAM_LIMIT_GB} GiB)"
 
 THROUGHPUT_SRC="$SMOKE_RUNS_DIR/$RUN_ID/throughput.json"

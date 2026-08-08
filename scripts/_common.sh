@@ -18,6 +18,21 @@
 
 CL_DISK_MOUNT="$PROJECT_ROOT"
 CL_MIN_FREE_GB=40
+
+# Host RAM budget for DeepSpeed's CPU optimizer offload (configs/accel/ds_zero3.json).
+# ZeRO-3 keeps fp32 master weights + exp_avg + exp_avg_sq on the host: 12 bytes/param,
+# partitioned across ranks but summing to the full amount on the host.
+#   Qwen3-4B-Base = 4,022,468,096 params x 12 B = ~48 GB total (~24 GB per rank)
+# The cap is a hard ceiling this machine is shared under; the guard refuses to start rather
+# than discovering it by having the kernel OOM-kill a stage. Note swap is effectively full,
+# so there is no safety net underneath this.
+# CL_EXPECTED_OFFLOAD_GB is 0 because offload is currently DISABLED: DeepSpeed cannot build
+# its CPU Adam op on this machine (system CUDA 12.4 vs torch's 13.0 - see the header of
+# configs/accel/ds_zero3.yaml). If the toolkits are ever aligned and offload is switched
+# back on, set this to 48 and the guard below starts enforcing the cap again.
+CL_MAX_HOST_RAM_GB=100
+CL_EXPECTED_OFFLOAD_GB=0
+CL_HOST_RAM_MARGIN_GB=20
 CL_VRAM_LIMIT_GB=44               # RTX A6000 is 48 GB; 44 leaves headroom for fragmentation
 
 # The GPU pair, as physical device ids. Single source of truth: the device assertion, the
@@ -25,9 +40,21 @@ CL_VRAM_LIMIT_GB=44               # RTX A6000 is 48 GB; 44 leaves headroom for f
 # must never appear (it is also the only card on the other socket - see CL_NUMA_NODE).
 #
 #
-# 0,2 is a PXB pair (multiple PCIe bridges, no host bridge). 0,4 was NODE, which also
-# traverses the PCIe host bridge, so 0,2 has the shorter path between ranks. Neither pair
-# has NVLink.
+# USE 0,2 ONLY WITH NCCL_P2P_DISABLE=1 (set in .env). That is not optional here.
+#
+# P2P across the PXB path between 0 and 2 is broken, and it fails SILENTLY: NCCL sets up
+# channels `via P2P/CUMEM`, the collective times out, and execution continues with
+# untransferred data. Measured twice with both cards idle - a broadcast left rank 0 at 1.0
+# (correct) and rank 1 at 2.0 (its own untouched value). Gradients would never sync; the
+# loss curve looks plausible and the model is garbage.
+#
+# With NCCL_P2P_DISABLE=1 collectives route through host memory and are correct: verified
+# 3/3 on broadcast and all_reduce. cl_assert_nccl() re-checks this before every training
+# run, because "the collective returned" is not the same as "the data moved".
+#
+# 0,4 (NODE) works with P2P enabled and needs no workaround - fall back to it if 0,2 or the
+# host-staging cost becomes a problem. `nvidia-smi topo -p2p r` claims OK for every pair on
+# this box; that is P2P *capability*, not proof that P2P DMA works over the path.
 CL_REQUIRED_DEVICES="0,2"
 CL_FORBIDDEN_DEVICE=5
 
@@ -108,6 +135,25 @@ cl_assert_numa() {
     cl_info "numa ok: GPUs $CL_REQUIRED_DEVICES are all on NUMA node $CL_NUMA_NODE"
 }
 
+# A shell started before uv was installed will not have ~/.local/bin on PATH, because
+# ~/.bashrc picks it up only at startup. Recover instead of failing a long run over it.
+cl_ensure_uv() {
+    command -v uv >/dev/null 2>&1 && return 0
+    local candidate
+    for candidate in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" /usr/local/bin/uv; do
+        if [[ -x "$candidate" ]]; then
+            PATH="$(dirname "$candidate"):$PATH"
+            export PATH
+            cl_info "uv was not on PATH; using $candidate"
+            return 0
+        fi
+    done
+    cl_die "uv is not on PATH and is not in ~/.local/bin, ~/.cargo/bin or /usr/local/bin.
+       If it is installed, your shell predates it:  source \$HOME/.local/bin/env
+       Do NOT 'snap install astral-uv' - that installs a second, different uv beside the
+       existing one and the two will disagree about the project environment."
+}
+
 # Catches a broken package rename in seconds rather than 40 minutes into a run.
 cl_assert_package() {
     ( cd "$PROJECT_ROOT" && uv run python -c "import continual_llms" ) >/dev/null 2>&1 \
@@ -128,6 +174,29 @@ cl_check_disk() {
         cl_die "only ${free} GB free on $CL_DISK_MOUNT (need >= ${CL_MIN_FREE_GB} GB)${where:+ [$where]}."
     fi
     cl_info "disk ok: ${free} GB free on $CL_DISK_MOUNT${where:+ [$where]}"
+}
+
+# Host RAM for the CPU optimizer offload. Checks the declared budget against the cap, then
+# against what is actually available. MemAvailable already accounts for reclaimable page
+# cache, which is most of what "used" looks like on this box.
+cl_check_host_ram() {
+    local avail need
+    if (( CL_EXPECTED_OFFLOAD_GB == 0 )); then
+        cl_info "host ram: optimizer offload disabled, nothing to budget"
+        return 0
+    fi
+    need=$(( CL_EXPECTED_OFFLOAD_GB + CL_HOST_RAM_MARGIN_GB ))
+    (( CL_EXPECTED_OFFLOAD_GB <= CL_MAX_HOST_RAM_GB )) || cl_die \
+        "the optimizer offload wants ${CL_EXPECTED_OFFLOAD_GB} GB of host RAM, over the
+       ${CL_MAX_HOST_RAM_GB} GB cap. Lower it, or turn offload_optimizer back to 'none' in
+       configs/accel/ds_zero3.json and find the headroom on the GPU instead."
+    avail=$(awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo)
+    (( avail >= need )) || cl_die \
+        "only ${avail} GB host RAM available; the CPU optimizer offload needs about
+       ${CL_EXPECTED_OFFLOAD_GB} GB plus a ${CL_HOST_RAM_MARGIN_GB} GB margin. Swap is full on
+       this machine, so there is nothing underneath a shortfall - wait for other jobs to
+       finish rather than starting a stage that cannot checkpoint."
+    cl_info "host ram ok: ${avail} GB available, offload needs ~${CL_EXPECTED_OFFLOAD_GB} GB (cap ${CL_MAX_HOST_RAM_GB} GB)"
 }
 
 # Refuse to start if somebody else is already computing on one of our GPUs.
@@ -153,11 +222,33 @@ cl_assert_gpus_idle() {
     cl_info "preflight ok: GPUs $CL_REQUIRED_DEVICES are idle"
 }
 
+# Verify NCCL actually moves data before committing hours to a run. On this machine a
+# collective was observed timing out and then continuing with untransferred data, which
+# would silently desynchronize training. ~20 s, almost all of it importing torch - cheap
+# against a 12 h curriculum. Call it only from scripts that train.
+cl_assert_nccl() {
+    local out
+    if ! out=$( cd "$PROJECT_ROOT" && timeout 180 "${CL_NUMACTL[@]}" \
+            uv run torchrun --nproc_per_node=2 scripts/_nccl_check.py 2>&1 ); then
+        cl_die "NCCL collectives are not working on GPUs $CL_REQUIRED_DEVICES:
+
+$(grep -E 'NCCL CHECK FAILED|timed out|Watchdog' <<< "$out" | head -4)
+
+       Do not train through this. A collective that returns without transferring leaves
+       gradients unsynchronized, and the run looks healthy while producing a garbage model.
+       On this box the fix was NCCL_P2P_DISABLE=1 in .env; see the comment on
+       CL_REQUIRED_DEVICES above."
+    fi
+    cl_info "nccl ok: broadcast and all_reduce verified on GPUs $CL_REQUIRED_DEVICES"
+}
+
 # Everything except the GPU-busy check, which a --dry-run has no business enforcing.
 cl_preflight_light() {
     cl_assert_env_names
     cl_assert_devices
     cl_assert_numa
+    cl_ensure_uv
+    cl_check_host_ram
     cl_assert_package
     cl_check_disk "start"
 }

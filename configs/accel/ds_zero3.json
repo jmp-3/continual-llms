@@ -6,9 +6,9 @@
     "contiguous_gradients": true,
     "reduce_bucket_size": "auto",
     "stage3_prefetch_bucket_size": "auto",
-    "stage3_param_persistence_threshold": 1e5,
-    "stage3_max_live_parameters": 1e9,
-    "stage3_max_reuse_distance": 1e9,
+    "stage3_param_persistence_threshold": 1e4,
+    "stage3_max_live_parameters": 1e8,
+    "stage3_max_reuse_distance": 1e8,
     "stage3_gather_16bit_weights_on_model_save": true,
     "offload_optimizer": { "device": "none" },
     "offload_param": { "device": "none" }

@@ -15,7 +15,8 @@ eval_split: valid
 # The L1 parents are NOT stages: their tarballs are byte-for-byte the union of their L2
 # children, so training on both would double-count the same articles.
 #
-# max_tokens caps each stage at ~20M tokens => ~2.5h at the assumed 2,200 tok/s, inside the
+# max_tokens caps each stage at ~20M tokens => ~2.3h at the 2,400 tok/s measured under
+# ZeRO-3 (00_smoke.sh), inside the
 # 3h ceiling in configs/train/cpt_base.yaml. WITHOUT these caps the four large domains run
 # 19h to 62h each and every one of them would be refused at startup. The uncapped train-side
 # totals are in REPORT_task2.md; raise a cap only together with --allow-long-stage and the

@@ -8,8 +8,11 @@ backward transfer and forward transfer fall out of one table.
 Built around Qwen3-4B-Base, full-parameter bf16, on two GPUs over PCIe. Nothing is
 model-specific except `configs/model/qwen3_4b.yaml`.
 
-> **Status:** the pipeline is implemented and tested; no full training run has been executed
-> yet. Numbers in the configs are budgets, not results.
+> **Status:** the pipeline runs end to end on real weights — training, evaluation, matrix
+> row, checkpoint promotion and reload all verified on one packed domain. No full curriculum
+> has been run yet, and `00_smoke.sh` still trips its own 44 GiB VRAM guard at 46.7 GiB under
+> ZeRO-3, so memory has to come down before a 14h unattended run. Stage-time figures in the
+> configs are budgets; only the ~2,400 tok/s throughput is measured.
 
 ---
 
@@ -33,8 +36,21 @@ configs/
 ├─ model/qwen3_4b.yaml
 ├─ data/m2d2_stages.yaml   the curriculum: stages, replay, eval domains
 ├─ train/{cpt_base,sft_base}.yaml
-└─ accel/                  ds_zero2 (default), ds_zero3, fsdp2_grad_op, fsdp2_full
+└─ accel/                  ds_zero3 (the one that fits), ds_zero2, fsdp2_grad_op, fsdp2_full
+scripts/
+├─ 00_smoke.sh             2 steps + 1 eval pass; asserts peak VRAM under the ceiling
+├─ 01_bakeoff.sh           the four accel configs on identical data + ZeRO-3 round-trip
+├─ 02_run_cpt.sh           the full curriculum, one process per stage
+├─ 03_eval_matrix.sh       ppl_matrix.jsonl -> matrix.csv/md, metrics.json, summary.txt
+├─ 04_archive.sh           weightless bundle of a run, verified under 100 MB
+└─ _common.sh              shared guards: devices, NUMA, NCCL correctness, disk, VRAM
 ```
+
+**ZeRO-2 is faster but does not fit.** Qwen3-4B with fp32 Adam needs ~36 GB/GPU under
+ZeRO-2 and OOMs at the first `optimizer.step()` on 47.4 GiB cards. ZeRO-3 shards parameters
+too, lands at ~32 GB, and runs — at an estimated 1.5–1.8× the wall time, because it
+re-gathers parameters every micro-batch over a 6.5 GB/s PCIe link. See the header of
+`configs/accel/ds_zero2.yaml`.
 
 ---
 
@@ -67,6 +83,38 @@ uv run python -c "from huggingface_hub import snapshot_download as d; \
 
 ## Running it
 
+Prefer `scripts/`. Each script takes `--dry-run` and prints the exact command it would run,
+and each one enforces the guards that this setup has actually needed: device pinning, NUMA
+binding, free disk, peak VRAM, and — importantly on this hardware — a check that NCCL
+collectives really move data (see *Verify your GPU pair* below).
+
+```bash
+uv run python -m continual_llms.data.tokenize_pack   # once, ~1h for the full corpus
+./scripts/00_smoke.sh                                # ~2 min, must print SMOKE OK
+./scripts/01_bakeoff.sh                              # ~2h at the default --steps 8
+nohup ./scripts/02_run_cpt.sh --accel ds_zero3 --tag v1 &
+./scripts/03_eval_matrix.sh <run_id>
+./scripts/04_archive.sh <run_id>
+```
+
+### Verify your GPU pair
+
+Do this before trusting any result on new hardware:
+
+```bash
+uv run torchrun --nproc_per_node=2 scripts/_nccl_check.py
+```
+
+On the machine this was developed on, one GPU pair had broken peer-to-peer DMA that failed
+**silently** — NCCL set up channels `via P2P/CUMEM`, the collective timed out, and execution
+continued with untransferred data. Gradients never synchronized, the loss curve looked
+normal, and the model was garbage. `nvidia-smi topo -p2p r` reported `OK` for every pair;
+that is P2P *capability*, not proof the DMA path works. If the check fails, set
+`NCCL_P2P_DISABLE=1` in `.env` and re-run it — that routes collectives through host memory,
+which cost under 5% here (6.6 vs 6.3 GB/s).
+
+### The underlying commands
+
 ```bash
 set -a; source .env; set +a
 
@@ -80,7 +128,7 @@ uv run python -m continual_llms.data.tokenize_pack
 uv run python -m continual_llms.train.cpt --dry-run
 
 # 4. Train.
-uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
+uv run accelerate launch --config_file configs/accel/ds_zero3.yaml \
     -m continual_llms.train.cpt --run-id my-run
 
 # 5. Build the matrix.
@@ -92,7 +140,7 @@ works but is the least robust part of the runner:
 
 ```bash
 for s in s01 s02 s03 s04 s05 s06; do
-  uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
+  uv run accelerate launch --config_file configs/accel/ds_zero3.yaml \
       -m continual_llms.train.cpt --run-id my-run --only-stage "$s" || break
 done
 ```
@@ -106,11 +154,20 @@ is the whole interface for running a different ordering. Stage `max_tokens` caps
 when a stage is *assembled*, not when the corpus is packed, so reordering stages or changing
 a cap invalidates nothing on disk.
 
-**ZeRO-2 is the default, not ZeRO-3.** ZeRO-3 re-gathers parameters on every micro-batch, so
-`gradient_accumulation_steps: 64` multiplies its communication instead of amortizing it;
-ZeRO-2 touches the wire once per optimizer step. On a PCIe-only link that dominates, and
-ZeRO-3 saves only ~4 GB/GPU here — not the binding constraint. All four sharding configs are
-provided for a bake-off.
+**ZeRO-3, reluctantly.** ZeRO-2 re-gathers nothing and touches the wire once per optimizer
+step, so on a PCIe-only link it should win — an estimated 1.5–1.8× on wall time. It is also
+unusable here: Qwen3-4B needs ~36 GB/GPU of static state under ZeRO-2 and OOMs at the first
+`optimizer.step()`, where torch AdamW lazily allocates `exp_avg` and `exp_avg_sq`. ZeRO-3
+shards parameters as well, lands at ~32 GB, and runs. The ~4 GB difference turned out to be
+the whole ballgame. To get ZeRO-2 back you need to shrink optimizer state (8-bit Adam) or
+offload it — the latter needs a DeepSpeed CPU op that will not build unless the system CUDA
+toolkit matches torch's.
+
+**Verify the interconnect, do not infer it.** `nvidia-smi topo -m` tells you the path between
+two GPUs; it does not tell you that path works. One pair on the development machine reported
+a *shorter* topology and `OK` P2P capability, yet silently returned untransferred data from
+every collective. `scripts/_nccl_check.py` asserts the values a broadcast and an all-reduce
+actually produce, and runs as a preflight in every training script.
 
 **One epoch per stage, enforced by the schema.** Domain corpora are small relative to a 4B
 model; multiple epochs at 2e-5 memorize the domain and inflate measured forgetting, which is

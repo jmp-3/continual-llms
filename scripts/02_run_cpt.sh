@@ -162,6 +162,7 @@ fi
 # --------------------------------------------------------------------------------------
 
 cl_assert_gpus_idle
+cl_assert_nccl
 mkdir -p "$RUN_DIR"
 [[ -f "$SMOKE_THROUGHPUT" ]] && cp "$SMOKE_THROUGHPUT" "$RUN_DIR/throughput.json"
 cl_setup_logging 02_run_cpt "$RUN_ID"

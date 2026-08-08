@@ -5,7 +5,11 @@
 #   true  -> parameters are resharded immediately             == FULL_SHARD (fsdp2_full.yaml)
 # So this is the closest FSDP analogue of ZeRO-2: optimizer state and gradients are sharded,
 # parameters are not re-gathered per micro-batch. On a PCIe-only link that is the difference
-# that matters.
+# that matters for speed.
+#
+# EXPECT THIS ARM TO OOM, for the same reason ds_zero2 does: leaving parameters gathered
+# costs ~4 GB/GPU that Qwen3-4B does not have on 47.4 GiB cards, and it dies at the first
+# optimizer.step(). See the header of configs/accel/ds_zero2.yaml for the arithmetic.
 #
 # Wrapping is transformer-block based on the model's actual decoder layer class
 # (Qwen3DecoderLayer, matching configs/model/qwen3_4b.yaml), not a parameter-count heuristic.

@@ -23,6 +23,17 @@
 #   uv run accelerate launch --config_file configs/accel/ds_zero3.yaml \
 #       -m continual_llms.train.cpt --run-id my-run
 
+# CPU optimizer offload is NOT available on this machine. Setting
+#   "offload_optimizer": {"device": "cpu"}
+# in ds_zero3.json makes DeepSpeed require DeepSpeedCPUAdam, which it JIT-compiles at first
+# use - and that fails here:
+#   CUDAMismatchException: Installed CUDA version 12.4 does not match the version torch was
+#   compiled with 13.0, unable to compile cuda/cpp extensions
+# No DeepSpeed native op can be built until the system CUDA toolkit matches torch's. ZeRO-2
+# and ZeRO-3 themselves need no compiled ops, so everything else works. Memory headroom has
+# to come from the GPU side instead: stage3_max_live_parameters, eval batch size, and
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True in .env.
+
 compute_environment: LOCAL_MACHINE
 debug: false
 distributed_type: DEEPSPEED
@@ -33,7 +44,11 @@ downcast_bf16: 'no'
 enable_cpu_affinity: false
 machine_rank: 0
 main_training_function: main
-mixed_precision: bf16
+# NO mixed_precision here. When `deepspeed_config_file` is set, accelerate refuses to also
+# take mixed_precision/gradient_accumulation_steps/gradient_clipping/zero_stage from this
+# file - it raises rather than silently ignoring them. bf16 comes from `bf16: true` in
+# configs/train/cpt_base.yaml, which HF Trainer substitutes into the JSON's
+# `"bf16": {"enabled": "auto"}`. Adding it back here breaks every run at startup.
 num_machines: 1
 num_processes: 2
 rdzv_backend: static

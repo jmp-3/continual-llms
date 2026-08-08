@@ -151,6 +151,7 @@ fi
 # --------------------------------------------------------------------------------------
 
 cl_assert_gpus_idle
+cl_assert_nccl
 cl_setup_logging 01_bakeoff "$RUN_ID"
 trap cl_on_exit EXIT
 

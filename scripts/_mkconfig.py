@@ -31,6 +31,32 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--domain", default=None, help="defaults to the first stage's domain")
     p.add_argument("--runs-dir", required=True)
     p.add_argument("--world-size", type=int, default=2)
+    p.add_argument(
+        "--accum",
+        type=int,
+        default=None,
+        help="override gradient_accumulation_steps. Production is 64, which makes one "
+        "optimizer step 524,288 tokens - more than some small domains hold in total. Lower "
+        "it to shrink a plumbing test; it barely moves peak VRAM, which is dominated by "
+        "static optimizer state.",
+    )
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="override per_device_train_batch_size. This is the knob that DOES move peak "
+        "VRAM: activations scale with it, while accum does not. Raise it and lower --accum "
+        "by the same factor to keep tokens/optimizer step - and therefore the effective "
+        "batch and the learning-rate schedule - unchanged.",
+    )
+    p.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=None,
+        help="override per_device_eval_batch_size. Eval is the other memory peak: logits "
+        "are batch x seq_len x vocab, ~1.2 GB per sequence in bf16 before the float32 "
+        "cross-entropy upcast, and under ZeRO-2 the optimizer state is still resident.",
+    )
     p.add_argument("--warmup-steps", type=int, default=None)
     p.add_argument("--measure-steps", type=int, default=None)
     p.add_argument("--eval-max-tokens", type=int, default=None)
@@ -43,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     domain = args.domain or data["stages"][0]["domain"]
 
     seq_len = int(data["seq_len"])
+    if args.batch_size is not None:
+        train["per_device_train_batch_size"] = args.batch_size
+    if args.eval_batch_size is not None:
+        train["per_device_eval_batch_size"] = args.eval_batch_size
+    if args.accum is not None:
+        train["gradient_accumulation_steps"] = args.accum
     bs = int(train["per_device_train_batch_size"])
     accum = int(train["gradient_accumulation_steps"])
     tokens_per_step = bs * accum * args.world_size * seq_len
@@ -97,6 +129,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"STAGE_MAX_TOKENS={max_tokens}")
     print(f"WARMUP_STEPS={warmup}")
     print(f"MEASURE_STEPS={measure}")
+    print(f"ACCUM={accum}")
+    print(f"BATCH_SIZE={bs}")
+    print(f"EVAL_BATCH_SIZE={int(train['per_device_eval_batch_size'])}")
     print(f"PROJECTED_HOURS={projected_hours:.3f}")
     return 0
 

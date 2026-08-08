@@ -106,9 +106,39 @@ def test_sft_config_loads():
 )
 def test_accelerate_configs_parse(name: str):
     cfg = yaml.safe_load((CONFIGS / "accel" / name).read_text())
-    assert cfg["mixed_precision"] == "bf16"
     assert cfg["num_processes"] == 2
     assert cfg["use_cpu"] is False
+
+
+@pytest.mark.parametrize("name", ["fsdp2_grad_op.yaml", "fsdp2_full.yaml"])
+def test_fsdp_configs_set_mixed_precision(name: str):
+    """FSDP takes bf16 from the accelerate config, so it must be present here."""
+    cfg = yaml.safe_load((CONFIGS / "accel" / name).read_text())
+    assert cfg["mixed_precision"] == "bf16"
+
+
+@pytest.mark.parametrize("name", ["ds_zero2.yaml", "ds_zero3.yaml"])
+def test_deepspeed_configs_omit_keys_accelerate_refuses(name: str):
+    """The opposite of the FSDP case, and it is not cosmetic.
+
+    When ``deepspeed_config_file`` is set, accelerate *raises* rather than ignoring config
+    keys that the DeepSpeed JSON owns::
+
+        ValueError: When using `deepspeed_config_file`, the following accelerate config
+        variables will be ignored: ['gradient_accumulation_steps', 'gradient_clipping',
+        'zero_stage', ..., 'mixed_precision'].
+
+    A `mixed_precision: bf16` line here broke every DeepSpeed run at startup. bf16 comes from
+    `bf16: true` in configs/train/cpt_base.yaml, which HF Trainer substitutes into the JSON's
+    ``"bf16": {"enabled": "auto"}``.
+    """
+    cfg = yaml.safe_load((CONFIGS / "accel" / name).read_text())
+    assert "deepspeed_config_file" in cfg["deepspeed_config"]
+    for forbidden in ("mixed_precision", "gradient_accumulation_steps", "gradient_clipping"):
+        assert forbidden not in cfg, f"{forbidden} in {name} makes accelerate raise at startup"
+
+    ds = json.loads((CONFIGS / "accel" / name.replace(".yaml", ".json")).read_text())
+    assert ds["bf16"] == {"enabled": "auto"}
 
 
 def test_zero3_gathers_weights_on_save():
@@ -118,12 +148,24 @@ def test_zero3_gathers_weights_on_save():
     zero = ds["zero_optimization"]
     assert zero["stage"] == 3
     assert zero["stage3_gather_16bit_weights_on_model_save"] is True
-    assert zero["stage3_param_persistence_threshold"] == 1e5
+    # A bound, not an equality: this is a memory/communication tuning knob, lowered from 1e5
+    # to 1e4 while chasing the ~3 GB that separates a 46.7 GiB peak from the 44 GiB ceiling.
+    # Smaller keeps fewer parameters permanently gathered, at the cost of more re-gathers.
+    assert zero["stage3_param_persistence_threshold"] <= 1e5
     assert zero["overlap_comm"] is True
     assert zero["contiguous_gradients"] is True
 
 
-def test_zero2_is_the_default_and_has_no_offload():
+def test_deepspeed_configs_have_no_offload():
+    """Offload would free ~24 GB/GPU but needs DeepSpeed's CPU Adam op, which cannot build
+    here: system CUDA 12.4 against torch's 13.0. Enabling it fails at the first step."""
+    for name in ("ds_zero2.json", "ds_zero3.json"):
+        zero = json.loads((CONFIGS / "accel" / name).read_text())["zero_optimization"]
+        assert zero["offload_optimizer"]["device"] == "none", name
+        assert zero["offload_param"]["device"] == "none", name
+
+
+def test_zero2_has_no_offload():
     ds = json.loads((CONFIGS / "accel/ds_zero2.json").read_text())
     assert ds["zero_optimization"]["stage"] == 2
     assert ds["zero_optimization"]["offload_optimizer"]["device"] == "none"

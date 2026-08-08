@@ -1,19 +1,32 @@
-# DEFAULT sharding config. DeepSpeed ZeRO stage 2.
+# DeepSpeed ZeRO stage 2. FASTER THAN ZERO-3 HERE, BUT IT DOES NOT FIT - see below.
 #
-# Why stage 2 and not stage 3, so this does not get "optimized" back:
+# Why stage 2 is the one you want on speed:
 # ZeRO-3 re-gathers parameters on every micro-batch, so gradient_accumulation_steps: 64 does
 # not amortize its communication - it multiplies it. ZeRO-2 touches the wire once per
-# optimizer step. GPUs 0 and 2 sit on a PXB PCIe link with no NVLink, so that is a real
-# difference - smaller than it was on the older 0,4 pair, which was NODE and also crossed
-# the PCIe host bridge, but still a difference. ZeRO-3 buys only ~4 GB/GPU here, which is
-# not the binding constraint. scripts/01_bakeoff.sh is what settles this on real numbers.
+# optimizer step. The GPU pair is PCIe-only with no NVLink, measured at 6.5 GB/s all_reduce,
+# so that is a large difference: an estimated 1.5-1.8x on end-to-end throughput.
+#
+# Why you cannot use it anyway, measured on Qwen3-4B-Base with 2 ranks on 47.4 GiB cards:
+#   ZeRO-2 static = params 8.0 + grads 4.0 + fp32 master/exp_avg/exp_avg_sq 24.1 = ~36 GB
+#   It OOMs at the FIRST optimizer.step(), where torch AdamW lazily allocates exp_avg and
+#   exp_avg_sq (7.49 GiB each): 33.74 + 7.49 + 7.49 = 48.7 GiB against 47.4 GiB available.
+#   ZeRO-3 shards parameters too and lands at ~32 GB static, which is what makes it run.
+# So the earlier claim that "ZeRO-3 buys only ~4 GB/GPU, which is not the binding
+# constraint" was exactly wrong: that 4 GB is the whole difference between running and not.
+#
+# To make ZeRO-2 usable you have to shrink optimizer state - 8-bit Adam takes it from 12 to
+# 3 bytes/param (~18 GB/GPU back) - or offload it, which needs a DeepSpeed CPU op that will
+# not build here (system CUDA 12.4 vs torch 13.0).
+#
+# NOTE: scripts/01_bakeoff.sh cannot settle ZeRO-2 vs ZeRO-3 as things stand. The ZeRO-2 arm
+# OOMs, so it reports as `failed`, not as "faster but does not fit".
 #
 # Launch:
 #   set -a; source .env; set +a
 #   uv run accelerate launch --config_file configs/accel/ds_zero2.yaml \
 #       -m continual_llms.train.cpt --run-id my-run
 #
-# num_processes must match the number of devices in CUDA_VISIBLE_DEVICES (.env: 0,2).
+# num_processes must match the number of devices in CUDA_VISIBLE_DEVICES (.env: 0,4).
 # GPU 5 must never appear there.
 
 compute_environment: LOCAL_MACHINE
@@ -26,7 +39,11 @@ downcast_bf16: 'no'
 enable_cpu_affinity: false
 machine_rank: 0
 main_training_function: main
-mixed_precision: bf16
+# NO mixed_precision here. When `deepspeed_config_file` is set, accelerate refuses to also
+# take mixed_precision/gradient_accumulation_steps/gradient_clipping/zero_stage from this
+# file - it raises rather than silently ignoring them. bf16 comes from `bf16: true` in
+# configs/train/cpt_base.yaml, which HF Trainer substitutes into the JSON's
+# `"bf16": {"enabled": "auto"}`. Adding it back here breaks every run at startup.
 num_machines: 1
 num_processes: 2
 rdzv_backend: static
