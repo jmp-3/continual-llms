@@ -24,6 +24,11 @@
 # scripts/02_run_cpt.sh estimates stage wall time from a real number. Machine-specific.
 /.smoke_throughput.json
 
+# Weights & Biases. WANDB_DIR defaults to $CL_ROOT, and wandb creates <WANDB_DIR>/wandb/.
+# Kept out of runs/ on purpose: scripts/04_archive.sh caps a run bundle at 100 MB.
+# Offline runs live here until `wandb sync` uploads them - see docs/tracking.md.
+wandb/
+
 # =======================================================================================
 # Secrets and machine-specific configuration
 # =======================================================================================

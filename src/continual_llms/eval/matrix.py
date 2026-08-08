@@ -22,7 +22,16 @@ from pathlib import Path
 
 from ..env import load_env
 
-__all__ = ["MatrixData", "load_matrix", "compute_metrics", "render_markdown", "write_csv", "main"]
+__all__ = [
+    "MatrixData",
+    "load_matrix",
+    "compute_metrics",
+    "render_markdown",
+    "write_csv",
+    "wandb_summary_payload",
+    "push_metrics_to_wandb",
+    "main",
+]
 
 
 @dataclass
@@ -174,6 +183,91 @@ def compute_metrics(data: MatrixData) -> dict:
     return summary
 
 
+# --------------------------------------------------------------------------------------
+# writing the curriculum-level metrics back into the per-stage wandb runs
+# --------------------------------------------------------------------------------------
+
+
+def wandb_summary_payload(metrics: dict) -> dict:
+    """The subset of :func:`compute_metrics` worth pinning in a wandb summary.
+
+    Namespaced under ``cl/`` so it cannot collide with the ``eval/`` series each stage logs
+    live. All in nats of NLL, lower is better, positive = regression - same convention as
+    everywhere else in this module.
+    """
+    ratios = metrics.get("ppl_ratios", {})
+    payload = {
+        "cl/average_forgetting_nll": metrics.get("average_forgetting_nll"),
+        "cl/backward_transfer_nll": metrics.get("backward_transfer_nll"),
+        "cl/forward_transfer_nll": metrics.get("forward_transfer_nll"),
+        "cl/average_control_drift_nll": metrics.get("average_control_drift_nll"),
+        "cl/average_learning_nll": metrics.get("average_learning_nll"),
+        "cl/ppl_ratio/average_forgetting": ratios.get("average_forgetting"),
+        "cl/ppl_ratio/backward_transfer": ratios.get("backward_transfer"),
+        "cl/ppl_ratio/forward_transfer": ratios.get("forward_transfer"),
+        "cl/ppl_ratio/average_control_drift": ratios.get("average_control_drift"),
+        "cl/final_stage_index": metrics.get("final_stage_index"),
+        "cl/n_stages": metrics.get("n_stages"),
+        "cl/n_domains": metrics.get("n_domains"),
+    }
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def push_metrics_to_wandb(metrics: dict, *, run_dir: str | Path, log=print) -> int:
+    """Write the forgetting metrics into every stage run of the curriculum. Returns a count.
+
+    Forgetting, BWT and FWT are only defined once the *whole* curriculum has run, so no
+    stage can log them while it is training. This resumes each run recorded in
+    ``runs/<run_id>/wandb_runs.jsonl`` and writes them into its summary, which is what makes
+    the group's run table sortable by forgetting.
+
+    A silent no-op when wandb is unavailable, disabled, or the file is missing - the metrics
+    are already durable in ``metrics.json`` either way.
+    """
+    from ..tracking.wandb_perf import read_stage_runs, wandb_mode, wandb_settings_from_env
+
+    rows = read_stage_runs(run_dir)
+    if not rows or wandb_mode() == "disabled":
+        return 0
+    try:
+        import wandb
+    except Exception:
+        return 0
+
+    payload = wandb_summary_payload(metrics)
+    settings = wandb_settings_from_env()
+    group = Path(run_dir).name
+    written = 0
+    for row in rows:
+        try:
+            # resume="allow", never "must": an offline run that was never synced has no
+            # server-side history to attach to, and "must" would turn that into an error on
+            # a path whose whole job is to be optional.
+            run = wandb.init(
+                project=settings["project"],
+                entity=settings["entity"],
+                dir=settings["dir"],
+                mode=settings["mode"],
+                id=row["wandb_run_id"],
+                resume="allow",
+                reinit="finish_previous",
+                # Offline mode ignores `resume` and opens a *second* directory for the same
+                # id, which `wandb sync` later merges. Re-stating group and job_type keeps
+                # that second directory grouped correctly if it is ever synced alone.
+                group=group,
+                job_type=str(row.get("stage") or ""),
+            )
+            for key, value in payload.items():
+                run.summary[key] = value
+            run.finish()
+            written += 1
+        except Exception as exc:
+            log(f"wandb: could not update {row.get('stage')} ({type(exc).__name__}: {exc})")
+    if written:
+        log(f"wandb: wrote {len(payload)} continual-learning metrics into {written} stage run(s)")
+    return written
+
+
 def render_markdown(data: MatrixData, metrics: dict, *, value: str = "ppl") -> str:
     table = data.ppl if value == "ppl" else data.nll
     trained = data.trained_at()
@@ -263,6 +357,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jsonl", type=Path, required=True, help="runs/<run_id>/ppl_matrix.jsonl")
     parser.add_argument("--out-dir", type=Path, default=None, help="defaults to the jsonl's directory")
     parser.add_argument("--value", choices=["ppl", "nll"], default="ppl")
+    parser.add_argument(
+        "--wandb-summary",
+        action="store_true",
+        help="also write the continual-learning metrics into each stage's wandb run "
+        "(read from runs/<run_id>/wandb_runs.jsonl). Silently does nothing if wandb is "
+        "unavailable or that file is missing.",
+    )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="where wandb_runs.jsonl lives; defaults to the jsonl's directory.",
+    )
     args = parser.parse_args(argv)
 
     data = load_matrix(args.jsonl)
@@ -274,6 +381,9 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / "ppl_matrix.md").write_text(md + "\n", encoding="utf-8")
     write_csv(data, out_dir / "ppl_matrix.csv")
     (out_dir / "cl_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+
+    if args.wandb_summary:
+        push_metrics_to_wandb(metrics, run_dir=args.run_dir or args.jsonl.parent)
 
     print(md)
     print(f"wrote {out_dir / 'ppl_matrix.md'}, ppl_matrix.csv, cl_metrics.json")

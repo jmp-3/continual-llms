@@ -19,6 +19,8 @@ MODULES = [
     "continual_llms.train.sft",
     "continual_llms.eval.perplexity",
     "continual_llms.eval.matrix",
+    "continual_llms.tracking",
+    "continual_llms.tracking.wandb_perf",
 ]
 
 

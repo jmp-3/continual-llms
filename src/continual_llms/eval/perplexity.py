@@ -255,6 +255,44 @@ def main(argv: list[str] | None = None) -> int:
             ],
         )
         logger.info("wrote %d rows to %s", len(results), args.out)
+
+    # Tracking. This CLI produces row 0 of the matrix - the untouched base model that
+    # forward transfer is measured against - so it gets a run in the same group as the
+    # stages, with job_type "base". Fail-open, rank 0 only, and a no-op when wandb is off.
+    from ..tracking.wandb_perf import (
+        environment_config,
+        finish_run,
+        init_stage_run,
+        log_eval_results,
+    )
+
+    run_dir = Path(os.environ.get("CL_RUNS_DIR", root / "runs")) / args.run_id
+    wandb_run = init_stage_run(
+        run_id=args.run_id,
+        stage_name=args.stage_name,
+        stage_index=args.stage_index,
+        config={
+            **environment_config(
+                root=root,
+                seq_len=data_cfg.seq_len,
+                per_device_train_batch_size=0,
+                gradient_accumulation_steps=0,
+                world_size=1,
+                tokens_per_optimizer_step=0,
+                base_model_dir=args.model,
+            ),
+            "stage/name": args.stage_name,
+            "stage/index": args.stage_index,
+            "stage/domain": "",
+            "stage/model_source": str(args.model),
+            "eval_domains": domains,
+            "eval_max_tokens": data_cfg.eval_max_tokens,
+        },
+        run_dir=run_dir if run_dir.is_dir() else None,
+        log=logger.warning,
+    )
+    log_eval_results(wandb_run, results, global_step=0, log=logger.warning)
+    finish_run(wandb_run, log=logger.warning)
     return 0
 
 

@@ -188,12 +188,22 @@ def run_stage(
     eval_domains: list[str],
     allow_long_stage: bool,
     logger,
+    run_config: dict | None = None,
 ) -> StageOutcome:
     import torch
     from transformers import Trainer, TrainerCallback, TrainingArguments
 
     from ..data.loader import PackedCollator, build_stage_dataset
     from ..eval.perplexity import evaluate_domains
+    from ..tracking.wandb_perf import (
+        environment_config,
+        finish_run,
+        init_stage_run,
+        log_checkpoint,
+        log_eval_results,
+        make_wandb_perf_callback,
+        update_config,
+    )
     from .common import (
         append_jsonl_fsync,
         assert_tokenizer_identical,
@@ -257,6 +267,44 @@ def run_stage(
     logger.info("  loading weights from %s", model_source)
     model = load_causal_lm(model_source, model_cfg)
 
+    # Count parameters HERE, before DeepSpeed builds its engine. Once ZeRO-3 has
+    # partitioned them, both sum(p.numel()) and PreTrainedModel.num_parameters() report this
+    # rank's shard - num_parameters has no ds_numel path at all - and every FLOP-derived
+    # number downstream would be off by world_size. Same trap gathered_parameters() guards
+    # for the vocab assertion.
+    n_parameters = sum(p.numel() for p in model.parameters())
+
+    # --- tracking (observability only; must never be able to stop a stage) ---------------
+    wandb_config = {
+        **(run_config or {}),
+        **environment_config(
+            root=os.environ.get("CL_ROOT", run_dir.parent.parent),
+            seq_len=seq_len,
+            per_device_train_batch_size=train_cfg.per_device_train_batch_size,
+            gradient_accumulation_steps=train_cfg.gradient_accumulation_steps,
+            world_size=ws,
+            tokens_per_optimizer_step=tokens_per_step,
+            base_model_dir=base_model_dir,
+        ),
+        "stage/name": stage.name,
+        "stage/index": stage_index,
+        "stage/domain": stage.domain,
+        "stage/train_tokens": total_tokens,
+        "stage/expected_optimizer_steps": expected_steps,
+        "stage/realized_replay_ratio": stats.realized_replay_ratio,
+        "stage/model_source": str(model_source),
+        "model/num_parameters": n_parameters,
+    }
+    wandb_run = init_stage_run(
+        run_id=run_dir.name,
+        stage_name=stage.name,
+        stage_index=stage_index,
+        config=wandb_config,
+        run_dir=run_dir,
+        log=logger.warning,
+    )
+    report_to = ["wandb"] if wandb_run is not None else []
+
     stage_out = run_dir / "work" / stage.name
     args = TrainingArguments(
         output_dir=str(stage_out),
@@ -278,7 +326,8 @@ def run_stage(
         seed=train_cfg.seed + stage_index,
         dataloader_num_workers=train_cfg.dataloader_num_workers,
         remove_unused_columns=False,
-        report_to=[],
+        report_to=report_to,
+        run_name=f"{run_dir.name}/{stage.name}",
         ddp_find_unused_parameters=False,
     )
 
@@ -295,12 +344,37 @@ def run_stage(
         log=logger.info,
     )
 
+    # Appended after throughput_cb, and therefore after the reporting callbacks Trainer
+    # prepends: its on_train_begin must run *after* WandbCallback.setup, which registers a
+    # `define_metric("*", step_metric="train/global_step")` that would otherwise clobber the
+    # tokens-seen axis registered below.
+    perf_cb = make_wandb_perf_callback(TrainerCallback)(
+        run=wandb_run,
+        tokens_per_step=tokens_per_step,
+        world_size=ws,
+        n_parameters=n_parameters,
+        n_layers=int(model.config.num_hidden_layers),
+        hidden_size=int(model.config.hidden_size),
+        seq_len=seq_len,
+        gradient_checkpointing=train_cfg.gradient_checkpointing,
+        device_name=torch.cuda.get_device_name() if torch.cuda.is_available() else None,
+        log=logger.warning,
+    )
+
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=dataset,
         data_collator=PackedCollator(),
-        callbacks=[throughput_cb],
+        callbacks=[throughput_cb, perf_cb],
+    )
+
+    # Only now does an AcceleratorState exist, so this is the earliest the ZeRO stage can be
+    # read rather than guessed.
+    update_config(
+        wandb_run,
+        {"launch/zero_stage": deepspeed_zero_stage()},
+        log=logger.warning,
     )
 
     t_train = time.time()
@@ -357,6 +431,16 @@ def run_stage(
             ],
         )
         logger.info("  wrote %d eval rows to ppl_matrix.jsonl (fsynced)", len(results))
+        # Rank 0 only, and after evaluate_domains' all_reduce has completed on every rank.
+        # The stage x domain matrix *is* the forgetting signal here - there is no
+        # in-domain/general split - so every scored domain gets its own series.
+        log_eval_results(
+            wandb_run,
+            results,
+            stage_domain=stage.domain,
+            global_step=int(trainer.state.global_step),
+            log=logger.warning,
+        )
     _barrier()
 
     # --- 2. the model must still speak exactly the base model's token ids ---------------
@@ -411,6 +495,15 @@ def run_stage(
         eval_seconds=round(eval_seconds, 1),
         free_gb_after=round(free, 1),
     )
+
+    if is_main_process() and wandb_run is not None:
+        log_checkpoint(wandb_run, final_dir, base_model_dir=base_model_dir, log=logger.warning)
+        try:
+            for key, value in asdict(outcome).items():
+                wandb_run.summary[f"stage/{key}"] = value
+        except Exception as exc:  # tracking must never fail a finished stage
+            logger.warning("  wandb: stage summary failed (%s: %s)", type(exc).__name__, exc)
+    finish_run(wandb_run, log=logger.warning)
 
     # Free the engine before the next stage rebuilds one.
     del trainer, model, eval_model
@@ -514,7 +607,7 @@ def plan_stages(
 
 def run_baseline_eval(
     *, base_model_dir: Path, data_cfg, train_cfg, model_cfg, run_dir: Path,
-    eval_domains: list[str], logger,
+    eval_domains: list[str], logger, run_config: dict | None = None,
 ) -> None:
     """Row 0 of the matrix: the untouched base model. Required for FWT and control drift."""
     import gc as _gc
@@ -523,6 +616,12 @@ def run_baseline_eval(
     import torch.distributed as dist
 
     from ..eval.perplexity import evaluate_domains
+    from ..tracking.wandb_perf import (
+        environment_config,
+        finish_run,
+        init_stage_run,
+        log_eval_results,
+    )
     from .common import append_jsonl_fsync, is_main_process, load_causal_lm, world_size
 
     if world_size() > 1 and dist.is_available() and not dist.is_initialized():
@@ -562,6 +661,31 @@ def run_baseline_eval(
                 for r in results
             ],
         )
+        wandb_run = init_stage_run(
+            run_id=run_dir.name,
+            stage_name="base",
+            stage_index=0,
+            config={
+                **(run_config or {}),
+                **environment_config(
+                    root=os.environ.get("CL_ROOT", run_dir.parent.parent),
+                    seq_len=data_cfg.seq_len,
+                    per_device_train_batch_size=0,
+                    gradient_accumulation_steps=0,
+                    world_size=world_size(),
+                    tokens_per_optimizer_step=0,
+                    base_model_dir=base_model_dir,
+                ),
+                "stage/name": "base",
+                "stage/index": 0,
+                "stage/domain": "",
+                "stage/model_source": str(base_model_dir),
+            },
+            run_dir=run_dir,
+            log=logger.warning,
+        )
+        log_eval_results(wandb_run, results, global_step=0, log=logger.warning)
+        finish_run(wandb_run, log=logger.warning)
     _barrier()
     del model
     _gc.collect()
@@ -658,25 +782,24 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("eval domains     : %d -> %s", len(eval_domains), ", ".join(eval_domains))
     logger.info("free disk        : %.1f GB", free_gb(run_dir))
 
+    # Assembled once and used twice: written to run_config.json, and handed to run_stage as
+    # the base of wandb.config. Rebuilding it there would let the two drift apart.
+    run_config = {
+        "run_id": run_id,
+        "data": data_cfg.model_dump(),
+        "model": model_cfg.model_dump(),
+        "train": train_cfg.model_dump(),
+        "world_size": ws,
+        "tokens_per_optimizer_step": tokens_per_step,
+        "eval_domains": eval_domains,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "argv": sys.argv,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+
     if is_main_process():
         (run_dir / "run_config.json").write_text(
-            json.dumps(
-                {
-                    "run_id": run_id,
-                    "data": data_cfg.model_dump(),
-                    "model": model_cfg.model_dump(),
-                    "train": train_cfg.model_dump(),
-                    "world_size": ws,
-                    "tokens_per_optimizer_step": tokens_per_step,
-                    "eval_domains": eval_domains,
-                    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-                    "argv": sys.argv,
-                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                },
-                indent=2,
-                default=str,
-            )
-            + "\n"
+            json.dumps(run_config, indent=2, default=str) + "\n"
         )
 
     if args.dry_run:
@@ -702,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
             run_dir=run_dir,
             eval_domains=eval_domains,
             logger=logger,
+            run_config=run_config,
         )
 
     current = run_dir / "current"
@@ -726,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
             eval_domains=eval_domains,
             allow_long_stage=args.allow_long_stage,
             logger=logger,
+            run_config=run_config,
         )
         outcomes.append(outcome)
         if is_main_process():

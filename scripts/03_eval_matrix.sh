@@ -88,11 +88,18 @@ RESCORE_CMD=(
     --out          "$MATRIX"
 )
 
+# --wandb-summary writes average forgetting / BWT / FWT back into each stage's wandb run.
+# Those metrics only exist once the whole curriculum has run, so no stage could log them
+# live. --run-dir is explicit because in --model-dir mode the matrix lives under eval/,
+# while wandb_runs.jsonl is always at the top of the run directory. Silent no-op when wandb
+# is off or that file is missing.
 MATRIX_CMD=(
     uv run python -m continual_llms.eval.matrix
     --jsonl   "$MATRIX"
     --out-dir "$EVAL_DIR"
     --value   "$VALUE"
+    --wandb-summary
+    --run-dir "$RUN_DIR"
 )
 
 # --------------------------------------------------------------------------------------
