@@ -1,0 +1,69 @@
+# Debug curriculum. Two short stages over the domains that are packed, for exercising the
+# *continual* machinery end to end in ~15 minutes rather than ~17 hours.
+#
+#   ./scripts/02_run_cpt.sh --accel ds_zero3 --stages configs/data/debug_stages.yaml \
+#       --batch-size 1 --accum 32 --eval-batch-size 1 --tag debug
+#
+# What this is meant to exercise, none of which a single-stage smoke test reaches:
+#   * the baseline row (stage 0) that forward transfer is measured against
+#   * stage 2 starting from stage 1's weights rather than the base model
+#   * current/ promotion and the removal of the previous current/, in the right order
+#   * a matrix row landing per (stage, domain) before weights move
+#   * forgetting: s01's domain should get worse after s02 trains on something else
+#   * replay mixing, and a control column that is never trained on
+#
+# It is NOT a scientific run. Stages are capped at ~2 optimizer steps, which is far too
+# little to move a 4B model meaningfully - expect small, noisy deltas. Use
+# configs/data/m2d2_stages.yaml for anything real.
+
+seq_len: 4096
+raw_dir: ${CL_RAW_DIR}
+packed_dir: ${CL_PACKED_DIR}
+train_split: train
+eval_split: valid
+
+# ---------------------------------------------------------------------------------------
+# stages, in order. Stage n+1 starts from stage n's weights.
+# ---------------------------------------------------------------------------------------
+# max_tokens is 524,288 = 2 optimizer steps at batch 1 x accum 32 x world 2 x seq 4096.
+# If you change --accum, this no longer lands on a round number of steps; that is harmless,
+# the stage just ends mid-accumulation.
+#
+# s01 is deliberately the smallest packed domain (999,424 train tokens total) so the cap is
+# the binding limit rather than the corpus.
+stages:
+  - {name: s01, domain: Society_and_social_sciences__Social_sciences,   max_tokens: 524288}
+  - {name: s02, domain: Human_activites__Impact_of_human_activity,      max_tokens: 524288}
+
+# ---------------------------------------------------------------------------------------
+# replay
+# ---------------------------------------------------------------------------------------
+# Same design as the real curriculum: the replay source is NOT one of the stages, so its
+# column measures drift rather than recent training. Its train split is packed, which is
+# what replay mixing draws from.
+replay:
+  enabled: true
+  source: Natural_and_physical_sciences__Physical_sciences
+  ratio: 0.05
+  strict_ratio: false
+  ratio_tolerance: 0.005
+
+# ---------------------------------------------------------------------------------------
+# evaluation
+# ---------------------------------------------------------------------------------------
+# ALL = every domain with a packed eval.bin: the two stage domains plus the control.
+eval_domains: [ALL]
+eval_only_domains:
+  - Natural_and_physical_sciences__Physical_sciences
+
+# Small enough that a matrix row costs about a minute. The real curriculum uses 2,000,000.
+eval_max_tokens: 200000
+
+# ---------------------------------------------------------------------------------------
+# document segmentation
+# ---------------------------------------------------------------------------------------
+# Irrelevant here - these only matter at packing time, and these domains are already packed.
+# Kept so the file is a complete DataConfig (the schema is extra="forbid").
+doc_delimiter_blank_lines: auto
+doc_delimiter_overrides: {}
+max_tokens_sampling: head

@@ -4,6 +4,8 @@
 #
 #   ./scripts/02_run_cpt.sh --accel ds_zero2 [--stages configs/data/m2d2_stages.yaml]
 #                           [--tag NAME] [--start-at STAGE] [--allow-long-stage]
+#                           [--batch-size N] [--accum N] [--eval-batch-size N]
+#                           [--max-stage-hours H]
 #                           [--no-baseline] [--dry-run]
 #
 # Stages run one process each (--only-stage), which is what the runner recommends: it is
@@ -40,6 +42,12 @@ TAG=cpt
 START_AT=""
 ALLOW_LONG=0
 NO_BASELINE=0
+BATCH_SIZE=""
+ACCUM=""
+EVAL_BATCH_SIZE=""
+MAX_STAGE_HOURS=""
+WARMUP_RATIO=""
+LEARNING_RATE=""
 
 usage() { sed -n '2,20p' "$0"; exit "${1:-0}"; }
 
@@ -52,6 +60,12 @@ while [[ $# -gt 0 ]]; do
         --start-at)         START_AT="$2"; shift 2 ;;
         --allow-long-stage) ALLOW_LONG=1; shift ;;
         --no-baseline)      NO_BASELINE=1; shift ;;
+        --batch-size)       BATCH_SIZE="$2"; shift 2 ;;
+        --accum)            ACCUM="$2"; shift 2 ;;
+        --eval-batch-size)  EVAL_BATCH_SIZE="$2"; shift 2 ;;
+        --max-stage-hours)  MAX_STAGE_HOURS="$2"; shift 2 ;;
+        --warmup-ratio)     WARMUP_RATIO="$2"; shift 2 ;;
+        --learning-rate)    LEARNING_RATE="$2"; shift 2 ;;
         --dry-run)          DRY_RUN=1; shift ;;
         -h|--help)          usage 0 ;;
         *) echo "unknown argument: $1" >&2; usage 1 ;;
@@ -99,6 +113,26 @@ PY
 )
 (( ${#STAGE_NAMES[@]} > 0 )) || cl_die "no stages resolved from $STAGES_CONFIG"
 
+# --------------------------------------------------------------------------------------
+# optional train-config overrides
+# --------------------------------------------------------------------------------------
+# The curriculum is untouched - only per-step cost changes - so stage transitions, matrix
+# rows, current/ promotion and the forgetting measurement all still exercise the real path.
+# Smaller steps make the continual behaviour observable in minutes instead of hours.
+TOKENS_PER_STEP=""
+if [[ -n "$BATCH_SIZE$ACCUM$EVAL_BATCH_SIZE$MAX_STAGE_HOURS$WARMUP_RATIO$LEARNING_RATE" ]]; then
+    PATCH_OUT=$(cd "$PROJECT_ROOT" && uv run python scripts/_patch_train.py \
+        --base "$TRAIN_CONFIG" \
+        --out  "$(cl_scratch_dir "$RUN_ID")/train.yaml" \
+        ${BATCH_SIZE:+--batch-size "$BATCH_SIZE"} \
+        ${ACCUM:+--accum "$ACCUM"} \
+        ${EVAL_BATCH_SIZE:+--eval-batch-size "$EVAL_BATCH_SIZE"} \
+        ${MAX_STAGE_HOURS:+--max-stage-hours "$MAX_STAGE_HOURS"} \
+        ${WARMUP_RATIO:+--warmup-ratio "$WARMUP_RATIO"} \
+        ${LEARNING_RATE:+--learning-rate "$LEARNING_RATE"})
+    eval "$PATCH_OUT"
+fi
+
 COMMON_ARGS=(
     -m continual_llms.train.cpt
     --run-id       "$RUN_ID"
@@ -130,6 +164,8 @@ if (( DRY_RUN )); then
     echo "stages config    : $STAGES_CONFIG"
     echo "stages           : ${STAGE_NAMES[*]}"
     echo "throughput       : $THROUGHPUT_SEEDED"
+    echo "train config     : $TRAIN_CONFIG"
+    [[ -n "$TOKENS_PER_STEP" ]] && echo "batch x accum    : $BATCH_SIZE x $ACCUM -> $TOKENS_PER_STEP tokens/optimizer step"
     echo "allow long stage : $ALLOW_LONG"
     echo "run dir          : $RUN_DIR"
     echo "log would be     : $RUN_DIR/logs/02_run_cpt_<timestamp>.log"
@@ -171,6 +207,8 @@ trap cl_on_exit EXIT
 echo "accel config     : $ACCEL_CONFIG"
 echo "stages config    : $STAGES_CONFIG"
 echo "stages           : ${STAGE_NAMES[*]}"
+echo "train config     : $TRAIN_CONFIG"
+[[ -n "$TOKENS_PER_STEP" ]] && echo "batch x accum    : $BATCH_SIZE x $ACCUM -> $TOKENS_PER_STEP tokens/optimizer step"
 echo "throughput       : $THROUGHPUT_SEEDED"
 cl_rule
 

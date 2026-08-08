@@ -1,0 +1,77 @@
+# Three-task continual pre-training curriculum. ~5 hours end to end.
+#
+#   ./scripts/02a_cpt_3task.sh
+#
+# Sized to be a real run rather than a plumbing test, while staying inside one working day
+# and well under the 3h per-stage ceiling that exists because there are no mid-stage
+# checkpoints.
+#
+# ---------------------------------------------------------------------------------------
+# ordering: two related domains, then a distant one
+# ---------------------------------------------------------------------------------------
+# s01 and s02 are both Philosophy-branch; s03 is Human activities. That asymmetry is the
+# point. Forgetting measured on s01 after s02 (same branch) versus after s03 (different
+# branch) separates "the model moved" from "the model moved away from this domain", which a
+# curriculum of three unrelated domains cannot distinguish.
+#
+# ---------------------------------------------------------------------------------------
+# why 15M tokens per stage, and one epoch
+# ---------------------------------------------------------------------------------------
+# One epoch, always - the schema enforces it and refuses more without an explicit flag. A
+# second pass at 2e-5 over a 15M-token domain memorizes it and inflates measured forgetting,
+# which is the dependent variable. If a stage is too small to matter, add tokens, not epochs.
+#
+# 15M tokens at the measured ~2,400 tok/s is ~1.7h per stage: enough to actually adapt a 4B
+# model, and a comfortable margin under max_stage_hours: 3.0 (20M would be ~2.3h, only ~30%
+# margin, and a projection miss gets the stage refused at startup).
+#
+# s03 is uncapped because the domain holds only 6.1M tokens in total.
+
+seq_len: 4096
+raw_dir: ${CL_RAW_DIR}
+packed_dir: ${CL_PACKED_DIR}
+train_split: train
+eval_split: valid
+
+stages:
+  - {name: s01, domain: Philosophy_and_thinking__Philosophy,        max_tokens: 15000000}
+  - {name: s02, domain: Philosophy_and_thinking__Thinking,          max_tokens: 15000000}
+  - {name: s03, domain: Human_activites__Impact_of_human_activity,  max_tokens: null}
+
+# ---------------------------------------------------------------------------------------
+# replay
+# ---------------------------------------------------------------------------------------
+# The replay source is deliberately not one of the stages, so its column measures drift
+# rather than recent training. 5% of each stage is drawn from it, without replacement within
+# a stage, and the realized ratio is logged - if that drifts from 0.05 it is a bug.
+# Physical_sciences has 44.6M packed train tokens, far more than the ~2.4M replay needs.
+replay:
+  enabled: true
+  source: Natural_and_physical_sciences__Physical_sciences
+  ratio: 0.05
+  strict_ratio: false
+  ratio_tolerance: 0.005
+
+# ---------------------------------------------------------------------------------------
+# evaluation
+# ---------------------------------------------------------------------------------------
+# ALL = every packed domain: the three stage domains plus two controls.
+#
+# Two controls, which do different jobs:
+#   Physical_sciences  - seen at 5% via replay, never a stage. Measures drift under replay.
+#   Social_sciences    - never seen at all. The clean control; its column is what separates
+#                        genuine interference from the model's distribution shifting
+#                        globally toward M2D2 text. Only 999K packed train tokens, which is
+#                        why it is a control here rather than a stage.
+eval_domains: [ALL]
+eval_only_domains:
+  - Natural_and_physical_sciences__Physical_sciences
+  - Society_and_social_sciences__Social_sciences
+
+# 1M tokens gives a tight perplexity estimate. The matrix is 4 rows x 5 domains, so this is
+# 20M tokens of evaluation (~35 min) - the real curriculum's 2M would double that.
+eval_max_tokens: 1000000
+
+doc_delimiter_blank_lines: auto
+doc_delimiter_overrides: {}
+max_tokens_sampling: head

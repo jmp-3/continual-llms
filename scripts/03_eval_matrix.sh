@@ -10,6 +10,7 @@
 #   matrix.md     rendered table
 #   metrics.json  average forgetting, backward transfer, forward transfer
 #   summary.txt   human-readable, also printed to stdout
+#   retention.svg each domain's drift from the checkpoint that had just trained it
 #
 # With --model-dir it works standalone against a completed run's final/ checkpoint: it
 # re-scores every eval domain with that checkpoint and builds a one-row matrix, without
@@ -125,6 +126,10 @@ if (( DRY_RUN )); then
     echo "   $(cl_show_cmd uv run python scripts/_eval_summary.py \
         --metrics "$EVAL_DIR/metrics.json" --matrix-md "$EVAL_DIR/matrix.md" \
         --out "$EVAL_DIR/summary.txt" --source "$SOURCE")"
+    echo
+    echo "4. draw the retention plot:"
+    echo "   $(cl_show_cmd uv run python scripts/_plot_retention.py \
+        --jsonl "$MATRIX" --out "$EVAL_DIR/retention.svg")"
     exit 0
 fi
 
@@ -165,9 +170,11 @@ uv run python scripts/_eval_summary.py \
     --out       "$EVAL_DIR/summary.txt" \
     --source    "$SOURCE"
 
+uv run python scripts/_plot_retention.py --jsonl "$MATRIX" --out "$EVAL_DIR/retention.svg"
+
 cl_rule
 echo "wrote:"
-for f in matrix.csv matrix.md metrics.json summary.txt; do
+for f in matrix.csv matrix.md metrics.json summary.txt retention.svg; do
     printf '  %-14s %s\n' "$f" "$(du -h "$EVAL_DIR/$f" | cut -f1)"
 done
 echo
