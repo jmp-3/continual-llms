@@ -47,14 +47,6 @@ def test_env_loading_expands_and_does_not_override():
     assert os.environ["CL_ROOT"] == parsed["CL_ROOT"]
 
 
-def test_cuda_visible_devices_never_names_gpu5():
-    """GPU 5 is off limits on this box."""
-    from continual_llms.env import load_env
-
-    devices = load_env().get("CUDA_VISIBLE_DEVICES", "")
-    assert "5" not in [d.strip() for d in devices.split(",") if d.strip()]
-
-
 def test_append_jsonl_is_durable_and_appends(tmp_path: Path):
     from continual_llms.train.common import append_jsonl_fsync
 

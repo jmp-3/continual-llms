@@ -9,62 +9,49 @@
 #     [[ "${CL_ROOT:-}" == "$PROJECT_ROOT" ]] || { echo "FATAL: ..."; exit 1; }
 #     source "$PROJECT_ROOT/scripts/_common.sh"
 #
-# PROJECT_ROOT comes from the script's own location rather than the environment, so a script run
-# from a stale shell cannot silently operate on another checkout.
+# PROJECT_ROOT comes from the script's own location rather than the environment, so a script
+# run from a stale shell cannot silently operate on another checkout.
 
 # --------------------------------------------------------------------------------------
 # invariants
 # --------------------------------------------------------------------------------------
 
-CL_DISK_MOUNT="$PROJECT_ROOT"
+# Free space is checked on the filesystem that holds the project; a checkpoint is ~8 GB.
+CL_DISK_PATH="${CL_DISK_PATH:-$PROJECT_ROOT}"
 CL_MIN_FREE_GB=40
 
 # Host RAM budget for DeepSpeed's CPU optimizer offload (configs/accel/ds_zero3.json).
-# ZeRO-3 keeps fp32 master weights + exp_avg + exp_avg_sq on the host: 12 bytes/param,
-# partitioned across ranks but summing to the full amount on the host.
-#   Qwen3-4B-Base = 4,022,468,096 params x 12 B = ~48 GB total (~24 GB per rank)
-# The cap is a hard ceiling this machine is shared under; the guard refuses to start rather
-# than discovering it by having the kernel OOM-kill a stage. Note swap is effectively full,
-# so there is no safety net underneath this.
-# CL_EXPECTED_OFFLOAD_GB is 0 because offload is currently DISABLED: DeepSpeed cannot build
-# its CPU Adam op on this machine (system CUDA 12.4 vs torch's 13.0 - see the header of
-# configs/accel/ds_zero3.yaml). If the toolkits are ever aligned and offload is switched
-# back on, set this to 48 and the guard below starts enforcing the cap again.
+# ZeRO-3 keeps fp32 master weights + exp_avg + exp_avg_sq on the host at 12 bytes/param,
+# ~48 GB in total for Qwen3-4B. The guard refuses to start a stage over the cap rather than
+# letting the kernel OOM-kill it partway through. CL_EXPECTED_OFFLOAD_GB is 0 because
+# offload is disabled (see configs/accel/ds_zero3.yaml); set it to 48 if it is re-enabled.
 CL_MAX_HOST_RAM_GB=100
 CL_EXPECTED_OFFLOAD_GB=0
 CL_HOST_RAM_MARGIN_GB=20
 CL_VRAM_LIMIT_GB=44               # RTX A6000 is 48 GB; 44 leaves headroom for fragmentation
 
-# The GPU pair, as physical device ids. Single source of truth: the device assertion, the
-# preflight idle check, and both nvidia-smi samplers all read it. GPU 5 is off limits and
-# must never appear (it is also the only card on the other socket - see CL_NUMA_NODE).
-#
-#
-# USE 0,2 ONLY WITH NCCL_P2P_DISABLE=1 (set in .env). That is not optional here.
-#
-# P2P across the PXB path between 0 and 2 is broken, and it fails SILENTLY: NCCL sets up
-# channels `via P2P/CUMEM`, the collective times out, and execution continues with
-# untransferred data. Measured twice with both cards idle - a broadcast left rank 0 at 1.0
-# (correct) and rank 1 at 2.0 (its own untouched value). Gradients would never sync; the
-# loss curve looks plausible and the model is garbage.
-#
-# With NCCL_P2P_DISABLE=1 collectives route through host memory and are correct: verified
-# 3/3 on broadcast and all_reduce. cl_assert_nccl() re-checks this before every training
-# run, because "the collective returned" is not the same as "the data moved".
-#
-# 0,4 (NODE) works with P2P enabled and needs no workaround - fall back to it if 0,2 or the
-# host-staging cost becomes a problem. `nvidia-smi topo -p2p r` claims OK for every pair on
-# this box; that is P2P *capability*, not proof that P2P DMA works over the path.
-CL_REQUIRED_DEVICES="0,2"
-CL_FORBIDDEN_DEVICE=5
+# --------------------------------------------------------------------------------------
+# machine settings - set these in .env
+# --------------------------------------------------------------------------------------
 
-# Every allowed GPU is on this NUMA node, so binding avoids cross-socket memory traffic.
-# cl_assert_numa() checks that at runtime rather than trusting this comment: --membind to
-# the wrong node is worse than not binding at all.
-CL_NUMA_NODE=0
+# The GPUs to train on, as physical device ids. Single source of truth for the device
+# assertion, the idle check and the nvidia-smi samplers. Defaults to CUDA_VISIBLE_DEVICES.
+# CL_FORBIDDEN_DEVICE optionally names a GPU that must never be used, e.g. one reserved for
+# other users on a shared machine.
+CL_REQUIRED_DEVICES="${CL_REQUIRED_DEVICES:-${CUDA_VISIBLE_DEVICES:-}}"
+CL_FORBIDDEN_DEVICE="${CL_FORBIDDEN_DEVICE:-}"
 
-# numactl prefix, used as an array so quoting survives.
-CL_NUMACTL=(numactl --cpunodebind="$CL_NUMA_NODE" --membind="$CL_NUMA_NODE")
+# NUMA node the GPUs are attached to. When set, work runs under numactl bound to that node
+# and cl_assert_numa() verifies the GPUs really are there, since binding to the wrong node
+# is worse than not binding at all. Leave unset to skip binding.
+CL_NUMA_NODE="${CL_NUMA_NODE:-}"
+
+# numactl prefix, used as an array so quoting survives. Empty when CL_NUMA_NODE is unset.
+if [[ -n "$CL_NUMA_NODE" ]]; then
+    CL_NUMACTL=(numactl --cpunodebind="$CL_NUMA_NODE" --membind="$CL_NUMA_NODE")
+else
+    CL_NUMACTL=()
+fi
 
 CL_T0=$(date +%s)
 CL_SAMPLER_PID=""
@@ -111,7 +98,8 @@ cl_assert_env_names() {
 
 cl_assert_devices() {
     local have="${CUDA_VISIBLE_DEVICES:-unset}"
-    if [[ ",$have," == *",$CL_FORBIDDEN_DEVICE,"* ]]; then
+    [[ -n "$CL_REQUIRED_DEVICES" ]] || cl_die "CUDA_VISIBLE_DEVICES is not set. Set it in .env."
+    if [[ -n "$CL_FORBIDDEN_DEVICE" && ",$have," == *",$CL_FORBIDDEN_DEVICE,"* ]]; then
         cl_die "CUDA_VISIBLE_DEVICES=$have contains GPU $CL_FORBIDDEN_DEVICE, which is off limits."
     fi
     [[ "$have" == "$CL_REQUIRED_DEVICES" ]] || cl_die \
@@ -123,6 +111,7 @@ cl_assert_devices() {
 # affinity is the second-to-last column, which keeps this robust to the GPU count.
 cl_assert_numa() {
     local topo idx node
+    [[ -n "$CL_NUMA_NODE" ]] || { cl_info "numa: CL_NUMA_NODE not set, not binding"; return 0; }
     topo=$(nvidia-smi topo -m 2>/dev/null) || { cl_info "numa: nvidia-smi topo unavailable, skipping"; return 0; }
     for idx in ${CL_REQUIRED_DEVICES//,/ }; do
         node=$(awk -v g="GPU$idx" '$1 == g { print $(NF-1) }' <<< "$topo" | head -1)
@@ -130,7 +119,7 @@ cl_assert_numa() {
         [[ "$node" == "$CL_NUMA_NODE" ]] || cl_die \
             "GPU$idx is on NUMA node $node but CL_NUMA_NODE=$CL_NUMA_NODE. Binding memory to the
        wrong socket is worse than not binding. Either pick GPUs on one node or update
-       CL_NUMA_NODE in scripts/_common.sh."
+       CL_NUMA_NODE in .env."
     done
     cl_info "numa ok: GPUs $CL_REQUIRED_DEVICES are all on NUMA node $CL_NUMA_NODE"
 }
@@ -162,7 +151,7 @@ cl_assert_package() {
 }
 
 cl_free_gb() {
-    df -BG --output=avail "$CL_DISK_MOUNT" | tail -1 | tr -dc '0-9'
+    df -BG --output=avail "$CL_DISK_PATH" | tail -1 | tr -dc '0-9'
 }
 
 # Call at start and after every stage: a full checkpoint is ~8 GB and there is no room to
@@ -171,14 +160,14 @@ cl_check_disk() {
     local where="${1:-}" free
     free=$(cl_free_gb)
     if (( free < CL_MIN_FREE_GB )); then
-        cl_die "only ${free} GB free on $CL_DISK_MOUNT (need >= ${CL_MIN_FREE_GB} GB)${where:+ [$where]}."
+        cl_die "only ${free} GB free on $CL_DISK_PATH (need >= ${CL_MIN_FREE_GB} GB)${where:+ [$where]}."
     fi
-    cl_info "disk ok: ${free} GB free on $CL_DISK_MOUNT${where:+ [$where]}"
+    cl_info "disk ok: ${free} GB free on $CL_DISK_PATH${where:+ [$where]}"
 }
 
 # Host RAM for the CPU optimizer offload. Checks the declared budget against the cap, then
 # against what is actually available. MemAvailable already accounts for reclaimable page
-# cache, which is most of what "used" looks like on this box.
+# cache, which is most of what "used" looks like on a busy machine.
 cl_check_host_ram() {
     local avail need
     if (( CL_EXPECTED_OFFLOAD_GB == 0 )); then
@@ -193,9 +182,8 @@ cl_check_host_ram() {
     avail=$(awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo)
     (( avail >= need )) || cl_die \
         "only ${avail} GB host RAM available; the CPU optimizer offload needs about
-       ${CL_EXPECTED_OFFLOAD_GB} GB plus a ${CL_HOST_RAM_MARGIN_GB} GB margin. Swap is full on
-       this machine, so there is nothing underneath a shortfall - wait for other jobs to
-       finish rather than starting a stage that cannot checkpoint."
+       ${CL_EXPECTED_OFFLOAD_GB} GB plus a ${CL_HOST_RAM_MARGIN_GB} GB margin. Wait for other
+       jobs to finish rather than starting a stage that cannot checkpoint."
     cl_info "host ram ok: ${avail} GB available, offload needs ~${CL_EXPECTED_OFFLOAD_GB} GB (cap ${CL_MAX_HOST_RAM_GB} GB)"
 }
 
@@ -222,10 +210,10 @@ cl_assert_gpus_idle() {
     cl_info "preflight ok: GPUs $CL_REQUIRED_DEVICES are idle"
 }
 
-# Verify NCCL actually moves data before committing hours to a run. On this machine a
-# collective was observed timing out and then continuing with untransferred data, which
-# would silently desynchronize training. ~20 s, almost all of it importing torch - cheap
-# against a 12 h curriculum. Call it only from scripts that train.
+# Verify NCCL actually moves data before committing hours to a run. A collective has been
+# observed timing out and then continuing with untransferred data, which silently
+# desynchronizes training (see docs/engineering-notes.md). ~20 s, almost all of it importing
+# torch - cheap against a 12 h curriculum. Call it only from scripts that train.
 cl_assert_nccl() {
     local out
     if ! out=$( cd "$PROJECT_ROOT" && timeout 180 "${CL_NUMACTL[@]}" \
@@ -236,8 +224,8 @@ $(grep -E 'NCCL CHECK FAILED|timed out|Watchdog' <<< "$out" | head -4)
 
        Do not train through this. A collective that returns without transferring leaves
        gradients unsynchronized, and the run looks healthy while producing a garbage model.
-       On this box the fix was NCCL_P2P_DISABLE=1 in .env; see the comment on
-       CL_REQUIRED_DEVICES above."
+       If peer-to-peer DMA is broken between these GPUs, set NCCL_P2P_DISABLE=1 in .env;
+       see docs/engineering-notes.md."
     fi
     cl_info "nccl ok: broadcast and all_reduce verified on GPUs $CL_REQUIRED_DEVICES"
 }
@@ -285,7 +273,7 @@ cl_setup_logging() {
 # --------------------------------------------------------------------------------------
 
 # nvidia-smi reports no historical peak, so poll for it. One sampler covers both memory and
-# utilization; the bake-off additionally runs `dmon -s u` because that is what it specifies.
+# utilization; the bake-off additionally records `dmon -s u` SM utilization.
 cl_sampler_start() {
     CL_SAMPLE_CSV="${1:-$(mktemp)}"
     : > "$CL_SAMPLE_CSV"
@@ -371,7 +359,7 @@ cl_on_exit() {
     echo "elapsed        : $(cl_elapsed)"
     cl_report_vram
     echo "disk:"
-    df -h "$CL_DISK_MOUNT"
+    df -h "$CL_DISK_PATH"
     [[ -n "${CL_LOG:-}" ]] && echo "log            : $CL_LOG"
     cl_rule
     return $rc
@@ -384,8 +372,8 @@ cl_on_exit() {
 cl_make_run_id() { echo "$(date +%Y%m%d_%H%M%S)_$1"; }
 
 # Scratch for generated YAML and for throwaway checkpoints. Kept off runs/ so 00_smoke.sh
-# can honour "writes nothing to runs/ except the log", but inside the project rather than /tmp
-# because a stage checkpoint is ~8 GB. Generated during --dry-run too, so the printed
+# can honour "writes nothing to runs/ except the log", but inside the project rather than
+# /tmp because a stage checkpoint is ~8 GB. Generated during --dry-run too, so the printed
 # command is genuinely runnable.
 cl_scratch_dir() {
     local d="$PROJECT_ROOT/.scratch/$1"
