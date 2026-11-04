@@ -5,14 +5,45 @@ domains, with a **stage × domain perplexity matrix** as the primary output: aft
 training stage the model is scored on the held-out split of *every* domain, so forgetting,
 backward transfer and forward transfer fall out of one table.
 
-Built around Qwen3-4B-Base, full-parameter bf16, on two GPUs over PCIe. Nothing is
+Built around Qwen3-4B-Base, full-parameter bf16, on two 48 GB GPUs over PCIe. Nothing is
 model-specific except `configs/model/qwen3_4b.yaml`.
 
-> **Status:** the pipeline runs end to end on real weights — training, evaluation, matrix
-> row, checkpoint promotion and reload all verified on one packed domain. No full curriculum
-> has been run yet, and `00_smoke.sh` still trips its own 44 GiB VRAM guard at 46.7 GiB under
-> ZeRO-3, so memory has to come down before a 14h unattended run. Stage-time figures in the
-> configs are budgets; only the ~2,400 tok/s throughput is measured.
+> **Status:** the pipeline is complete and verified end to end on real weights — training,
+> evaluation, matrix row, checkpoint promotion and reload (see
+> [What has been verified](#what-has-been-verified)). The full curricula have not been run
+> yet, so there is no results matrix here yet. See [Known limitations](#known-limitations).
+
+### Highlights
+
+- **A silent multi-GPU failure, caught and guarded against.** One GPU pair returned
+  untransferred data from every collective without raising an error, which would have
+  produced a garbage model behind a normal-looking loss curve. Every training script now
+  checks the *values* a broadcast and an all-reduce produce before it trains.
+  [Details](docs/engineering-notes.md#1-a-gpu-pair-that-silently-returned-wrong-data).
+- **Sharding chosen by measurement.** ZeRO-2 should be 1.5–1.8× faster on this link but is
+  ~4 GB per GPU short; ZeRO-3 fits. [The arithmetic](docs/engineering-notes.md#2-zero-2-is-faster-but-4-gb-short).
+- **Evaluation is durable before weights move**, and the tokenizer is asserted
+  byte-identical before any checkpoint is promoted.
+- **CPU-only test suite**: pack/load round trips, replay ratios, perplexity against a
+  reference implementation, config validation and the durable-write helpers.
+
+---
+
+## What has been verified
+
+On one packed domain (`Society_and_social_sciences__Social_sciences`), ZeRO-3 on two GPUs:
+
+| check | result |
+|---|---|
+| training | completes; train loss 2.041 |
+| evaluation | held-out NLL 2.0973 nats/token, perplexity 8.144 |
+| checkpoint | 8.1 GB, written durably and promoted |
+| reload | `scripts/_zero3_roundtrip.py`: 398 tensors, 4,022,468,096 elements, all full-shape, finite logits |
+| throughput | ~2,400 tokens/s |
+
+The two-stage debug curriculum (`configs/data/debug_stages.yaml`) has also been run, which
+exercises what a single stage cannot: stage 2 starting from stage 1's weights, checkpoint
+promotion between stages, and a matrix row landing before weights move.
 
 ---
 
@@ -28,41 +59,48 @@ src/continual_llms/
 ├─ train/
 │  ├─ common.py            model loading, ZeRO-3-safe weight access, durable writes
 │  ├─ cpt.py               sequential stage runner (entry point)
-│  └─ sft.py               stub for the downstream SFT phase
-└─ eval/
-   ├─ perplexity.py        per-domain held-out NLL
-   └─ matrix.py            jsonl -> stage x domain table + forgetting/BWT/FWT
+│  └─ sft.py               stub for a later SFT phase
+├─ eval/
+│  ├─ perplexity.py        per-domain held-out NLL
+│  └─ matrix.py            jsonl -> stage x domain table + forgetting/BWT/FWT
+└─ tracking/
+   └─ wandb_perf.py        W&B callback: throughput, MFU/HFU, memory, per-domain eval
 configs/
 ├─ model/qwen3_4b.yaml
-├─ data/m2d2_stages.yaml   the curriculum: stages, replay, eval domains
+├─ data/
+│  ├─ m2d2_stages.yaml     six-stage curriculum
+│  ├─ cpt3_stages.yaml     three-stage curriculum, ~5 h
+│  └─ debug_stages.yaml    two tiny stages for exercising the continual path, ~15 min
 ├─ train/{cpt_base,sft_base}.yaml
 └─ accel/                  ds_zero3 (the one that fits), ds_zero2, fsdp2_grad_op, fsdp2_full
 scripts/
 ├─ 00_smoke.sh             2 steps + 1 eval pass; asserts peak VRAM under the ceiling
 ├─ 01_bakeoff.sh           the four accel configs on identical data + ZeRO-3 round-trip
-├─ 02_run_cpt.sh           the full curriculum, one process per stage
-├─ 03_eval_matrix.sh       ppl_matrix.jsonl -> matrix.csv/md, metrics.json, summary.txt
+├─ 02_run_cpt.sh           a curriculum, one process per stage
+├─ 02a_cpt_3task.sh        the three-stage curriculum with its chosen hyperparameters
+├─ 03_eval_matrix.sh       matrix.csv/md, metrics.json, summary.txt, retention.svg
 ├─ 04_archive.sh           weightless bundle of a run, verified under 100 MB
-└─ _common.sh              shared guards: devices, NUMA, NCCL correctness, disk, VRAM
+├─ _common.sh              shared guards: devices, NUMA, NCCL correctness, disk, VRAM
+└─ _*.py                   helpers called by the scripts
+docs/
+├─ engineering-notes.md    problems found during bring-up and how they were fixed
+└─ tracking.md             what is logged to Weights & Biases, and why
 ```
-
-**ZeRO-2 is faster but does not fit.** Qwen3-4B with fp32 Adam needs ~36 GB/GPU under
-ZeRO-2 and OOMs at the first `optimizer.step()` on 47.4 GiB cards. ZeRO-3 shards parameters
-too, lands at ~32 GB, and runs — at an estimated 1.5–1.8× the wall time, because it
-re-gathers parameters every micro-batch over a 6.5 GB/s PCIe link. See the header of
-`configs/accel/ds_zero2.yaml`.
 
 ---
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/) and a CUDA-capable box.
+Requires [uv](https://docs.astral.sh/uv/) and a CUDA-capable machine.
 
 ```bash
-git clone <this repo> continual-llms && cd continual-llms
-cp .env.example .env      # then edit CL_ROOT and CUDA_VISIBLE_DEVICES
+git clone https://github.com/jmp-3/continual-llms.git && cd continual-llms
+cp .env.example .env      # then set CL_ROOT to this checkout, and CUDA_VISIBLE_DEVICES
 uv sync
 ```
+
+`.env.example` also documents optional machine settings: a device list the scripts insist
+on, a GPU that must never be used on a shared machine, and NUMA binding.
 
 Optionally `cp uv.toml.example uv.toml` if uv's cache lands on a different filesystem from
 `.venv` — **read the warning in that file first**, a `uv.toml` overrides the whole
@@ -84,17 +122,24 @@ uv run python -c "from huggingface_hub import snapshot_download as d; \
 ## Running it
 
 Prefer `scripts/`. Each script takes `--dry-run` and prints the exact command it would run,
-and each one enforces the guards that this setup has actually needed: device pinning, NUMA
-binding, free disk, peak VRAM, and — importantly on this hardware — a check that NCCL
-collectives really move data (see *Verify your GPU pair* below).
+and each one enforces the guards this setup has actually needed: device pinning, NUMA
+binding, free disk, peak VRAM, and a check that NCCL collectives really move data.
 
 ```bash
 uv run python -m continual_llms.data.tokenize_pack   # once, ~1h for the full corpus
-./scripts/00_smoke.sh                                # ~2 min, must print SMOKE OK
+./scripts/00_smoke.sh --accel ds_zero3               # ~2 min
 ./scripts/01_bakeoff.sh                              # ~2h at the default --steps 8
-nohup ./scripts/02_run_cpt.sh --accel ds_zero3 --tag v1 &
+nohup ./scripts/02a_cpt_3task.sh &                   # three-stage curriculum, ~5h
 ./scripts/03_eval_matrix.sh <run_id>
 ./scripts/04_archive.sh <run_id>
+```
+
+The six-stage curriculum is `./scripts/02_run_cpt.sh --accel ds_zero3 --tag v1`. To
+exercise the multi-stage path in ~15 minutes instead:
+
+```bash
+./scripts/02_run_cpt.sh --accel ds_zero3 --stages configs/data/debug_stages.yaml \
+    --batch-size 1 --accum 32 --eval-batch-size 1 --tag debug
 ```
 
 ### Verify your GPU pair
@@ -105,13 +150,10 @@ Do this before trusting any result on new hardware:
 uv run torchrun --nproc_per_node=2 scripts/_nccl_check.py
 ```
 
-On the machine this was developed on, one GPU pair had broken peer-to-peer DMA that failed
-**silently** — NCCL set up channels `via P2P/CUMEM`, the collective timed out, and execution
-continued with untransferred data. Gradients never synchronized, the loss curve looked
-normal, and the model was garbage. `nvidia-smi topo -p2p r` reported `OK` for every pair;
-that is P2P *capability*, not proof the DMA path works. If the check fails, set
-`NCCL_P2P_DISABLE=1` in `.env` and re-run it — that routes collectives through host memory,
-which cost under 5% here (6.6 vs 6.3 GB/s).
+If it fails, set `NCCL_P2P_DISABLE=1` in `.env` and re-run it. That routes collectives
+through host memory, which cost nothing measurable on the PCIe machine this was developed
+on. See [the engineering notes](docs/engineering-notes.md#1-a-gpu-pair-that-silently-returned-wrong-data)
+for what happens when you skip this.
 
 ### The underlying commands
 
@@ -145,6 +187,14 @@ for s in s01 s02 s03 s04 s05 s06; do
 done
 ```
 
+### Tracking
+
+Runs log to Weights & Biases, offline by default so an unattended job never blocks on a
+login or a dead network. There is one W&B run per stage, grouped by curriculum run, with
+throughput, MFU/HFU, memory, per-domain eval and the forgetting metrics. Tracking fails open:
+if wandb is missing or misconfigured, training continues without it. See
+[docs/tracking.md](docs/tracking.md).
+
 ---
 
 ## Design decisions worth knowing
@@ -158,16 +208,14 @@ a cap invalidates nothing on disk.
 step, so on a PCIe-only link it should win — an estimated 1.5–1.8× on wall time. It is also
 unusable here: Qwen3-4B needs ~36 GB/GPU of static state under ZeRO-2 and OOMs at the first
 `optimizer.step()`, where torch AdamW lazily allocates `exp_avg` and `exp_avg_sq`. ZeRO-3
-shards parameters as well, lands at ~32 GB, and runs. The ~4 GB difference turned out to be
-the whole ballgame. To get ZeRO-2 back you need to shrink optimizer state (8-bit Adam) or
-offload it — the latter needs a DeepSpeed CPU op that will not build unless the system CUDA
-toolkit matches torch's.
+shards parameters as well, lands at ~32 GB, and runs. That ~4 GB is the whole difference.
+To get ZeRO-2 back you need to shrink optimizer state (8-bit Adam) or offload it, which
+needs a DeepSpeed CPU op that only builds when the system CUDA toolkit matches torch's.
 
 **Verify the interconnect, do not infer it.** `nvidia-smi topo -m` tells you the path between
-two GPUs; it does not tell you that path works. One pair on the development machine reported
-a *shorter* topology and `OK` P2P capability, yet silently returned untransferred data from
-every collective. `scripts/_nccl_check.py` asserts the values a broadcast and an all-reduce
-actually produce, and runs as a preflight in every training script.
+two GPUs; it does not tell you that path works. `scripts/_nccl_check.py` asserts the values a
+broadcast and an all-reduce actually produce, and runs as a preflight in every training
+script.
 
 **One epoch per stage, enforced by the schema.** Domain corpora are small relative to a 4B
 model; multiple epochs at 2e-5 memorize the domain and inflate measured forgetting, which is
@@ -231,19 +279,34 @@ set -a; source .env; set +a
 uv run pytest -q
 ```
 
-Covers a pack → loader → decode round trip, `uint32` dtype, replay ratio accuracy and
-determinism, perplexity against a reference implementation on a tiny random model, the
-tokenizer-identity assertion the SFT phase depends on, config validation, and the durable-write
-and delete-guard helpers. Tests that need the base tokenizer skip cleanly without it.
+Runs on CPU in seconds. Covers a pack → loader → decode round trip, `uint32` dtype, replay
+ratio accuracy and determinism, perplexity against a reference implementation on a tiny
+random model, the tokenizer-identity assertion the SFT phase depends on, config validation,
+W&B metric arithmetic, and the durable-write and delete-guard helpers. Tests that need the
+base tokenizer or a finished run skip cleanly without them.
+
+---
+
+## Known limitations
+
+- **Peak VRAM is over the guard.** Under ZeRO-3, `00_smoke.sh` peaks at 46.7 GiB against its
+  own 44 GiB ceiling and exits non-zero, so memory has to come down before a long unattended
+  run. The levers are in [the engineering notes](docs/engineering-notes.md#3-open-issue-peak-vram-under-zero-3).
+- **`00_smoke.sh` defaults to `--accel ds_zero2`**, which does not fit; pass
+  `--accel ds_zero3`.
+- **No full curriculum has been run.** Stage-time figures in the configs are budgets; only
+  the ~2,400 tokens/s throughput is measured.
+- **SFT is a stub.** `continual_llms.train.sft` validates its inputs and stops; the intended
+  implementation is described in its docstring.
 
 ---
 
 ## Data and licensing
 
-This repo contains **no data and no model weights**. M2D2 is
-[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) — non-commercial use only —
-and must be obtained from its own source. Qwen3-4B-Base is Apache-2.0 and downloads from the
-Hub without authentication.
+The code is MIT-licensed (see [LICENSE](LICENSE)). This repo contains **no data and no model
+weights**. M2D2 is [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) —
+non-commercial use only — and must be obtained from its own source. Qwen3-4B-Base is
+Apache-2.0 and downloads from the Hub without authentication.
 
 If you use M2D2, cite:
 
@@ -253,3 +316,9 @@ If you use M2D2, cite:
 One upstream quirk this code depends on: the domain `Human_activites` is **misspelled
 upstream** (missing an `i`) and is correct as written. Normalizing it matches zero
 directories, and a test fails if anyone tries.
+
+---
+
+## AI assistance
+
+This project was developed with AI assistance (Claude Code).
