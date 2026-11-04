@@ -157,8 +157,8 @@ def test_zero3_gathers_weights_on_save():
 
 
 def test_deepspeed_configs_have_no_offload():
-    """Offload would free ~24 GB/GPU but needs DeepSpeed's CPU Adam op, which cannot build
-    here: system CUDA 12.4 against torch's 13.0. Enabling it fails at the first step."""
+    """Offload would free ~24 GB/GPU but needs DeepSpeed's CPU Adam op, which only builds when
+    the system CUDA toolkit matches torch's. Otherwise enabling it fails at the first step."""
     for name in ("ds_zero2.json", "ds_zero3.json"):
         zero = json.loads((CONFIGS / "accel" / name).read_text())["zero_optimization"]
         assert zero["offload_optimizer"]["device"] == "none", name

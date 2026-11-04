@@ -35,8 +35,8 @@ dataloader_num_workers: 2
 # ---------------------------------------------------------------------------------------
 # Logits for one eval batch are batch x 4096 x 151936. At bf16 that is ~1.2 GB per sequence
 # before the float32 cross-entropy upcast (which perplexity.py chunks). This is the knob to
-# turn down first if the post-stage evaluation OOMs, because ZeRO-2's optimizer state is
-# still resident at that point.
+# turn down first if the post-stage evaluation OOMs, because the optimizer state is still
+# resident at that point.
 per_device_eval_batch_size: 2
 eval_baseline: true                    # row 0 of the matrix; required for FWT
 

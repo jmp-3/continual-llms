@@ -1,8 +1,8 @@
 """Supervised fine-tuning on top of a CPT checkpoint. **Stub — deliberately not implemented.**
 
-Task 2 covers continual pre-training only. This module exists so the interface and its
-preconditions are pinned down now, and so the tokenizer-identity dependency is testable
-before any SFT code is written.
+The project currently covers continual pre-training only. This module exists so the
+interface and its preconditions are pinned down now, and so the tokenizer-identity
+dependency is testable before any SFT code is written.
 
 Intended implementation
 -----------------------
@@ -37,7 +37,7 @@ from ..env import load_env
 __all__ = ["load_cpt_checkpoint", "main"]
 
 _NOT_IMPLEMENTED = (
-    "SFT is out of scope for Task 2 and is intentionally not implemented.\n"
+    "SFT is not implemented yet.\n"
     "Intended path: trl.SFTTrainer + tokenizer.apply_chat_template + completion-only loss "
     "masking, launched with the same configs/accel/*.yaml used for CPT.\n"
     "See the module docstring in src/continual_llms/train/sft.py."

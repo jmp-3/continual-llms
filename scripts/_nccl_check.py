@@ -1,9 +1,9 @@
 """Verify that NCCL collectives actually move data between the two ranks.
 
-This exists because of a measured failure on this machine, not as a formality. On the
-GPU 0 / GPU 2 pair (PXB), NCCL negotiated its channels `via P2P/CUMEM`, the first
-collective timed out, and **execution continued with untransferred data**: rank 0 held the
-correct value and rank 1 held its own untouched value. Nothing crashed.
+This exists because of a measured failure, not as a formality. On one GPU pair, NCCL
+negotiated its channels `via P2P/CUMEM`, the first collective timed out, and **execution
+continued with untransferred data**: rank 0 held the correct value and rank 1 held its own
+untouched value. Nothing crashed.
 
 A training run in that state never synchronizes gradients or parameters. The loss curve
 looks plausible and the resulting model is garbage. `NCCL_P2P_DISABLE=1` routes collectives

@@ -44,7 +44,7 @@ def load_env(path: Path | str | None = None, *, override: bool = False) -> dict[
     """Parse the project ``.env`` into ``os.environ``.
 
     Existing environment variables win unless *override* is set, so an explicit
-    ``CUDA_VISIBLE_DEVICES=0,2 uv run ...`` on the command line still takes effect.
+    ``CUDA_VISIBLE_DEVICES=0,1 uv run ...`` on the command line still takes effect.
 
     Returns the parsed mapping (fully expanded), even for keys that were not applied.
     """

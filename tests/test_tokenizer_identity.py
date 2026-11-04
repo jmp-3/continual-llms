@@ -51,7 +51,7 @@ def test_missing_tokenizer_is_detected(base_model_dir: Path, tmp_path: Path):
 
 @pytest.mark.parametrize("subdir", ["final", "current"])
 def test_real_run_outputs_if_present(base_model_dir: Path, subdir: str):
-    """If a real run exists on this box, hold its output to the same standard."""
+    """If a real run exists locally, hold its output to the same standard."""
     runs = Path(os.environ.get("CL_RUNS_DIR", ""))
     if not runs.is_dir():
         pytest.skip("no runs directory yet")

@@ -63,12 +63,9 @@ dist/
 # =======================================================================================
 # Local working notes, reports, and one-off scripts. Deliberately untracked.
 # =======================================================================================
-REPORT_task2.md
-REPORT_task3.md
-fetch_m2d2.sh
-verify_m2d2.py
-compare_philosophy.py
-gen_manifest.py
+/REPORT*.md
+/*.py
+/*.sh
 scratch/
 notes/
 

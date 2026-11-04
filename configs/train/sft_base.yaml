@@ -1,4 +1,4 @@
-# STUB. Supervised fine-tuning is not implemented in Task 2.
+# STUB. Supervised fine-tuning is planned but not implemented yet.
 # `continual_llms.train.sft` validates the checkpoint and then raises NotImplementedError.
 # See the module docstring in src/continual_llms/train/sft.py for the intended implementation.
 

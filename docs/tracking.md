@@ -66,7 +66,7 @@ through rather than rebuilt, so the two cannot drift. On top of that:
 | `launch/cmdline` | the parent process' argv — the `accelerate launch` line, which `sys.argv` never shows |
 | `launch/accel_config`, `launch/deepspeed_config_file`, `launch/zero_stage` | e.g. `ds_zero3` / `configs/accel/ds_zero3.json` / `3`, read via `deepspeed_zero_stage()` once an `AcceleratorState` exists |
 | `device/names`, `device/count`, `device/peak_bf16_tflops` | `torch.cuda.get_device_name()` per visible device |
-| `env/NCCL_P2P_DISABLE`, `env/PYTORCH_CUDA_ALLOC_CONF` | both are load-bearing on this box; see `scripts/_common.sh` |
+| `env/NCCL_P2P_DISABLE`, `env/PYTORCH_CUDA_ALLOC_CONF` | both can be load-bearing; see `docs/engineering-notes.md` |
 | `tokenizer/sha256` | `tokenizer_file_hashes()`. Token ids are the interface between packed corpora, checkpoints, and every perplexity number |
 | `batch/micro_batch_size`, `batch/gradient_accumulation_steps`, `batch/world_size` | |
 | `batch/global_batch_sequences`, `batch/global_batch_tokens` | the effective batch in **both** units: tokens is the only figure comparable across curricula, sequences is the one that has to fit in VRAM |

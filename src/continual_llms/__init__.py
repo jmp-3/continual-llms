@@ -8,6 +8,7 @@ Layout
 ``train/sft.py``           deliberate stub for the downstream SFT phase
 ``eval/perplexity.py``     per-domain held-out NLL
 ``eval/matrix.py``         ``ppl_matrix.jsonl`` -> stage x domain table + CL metrics
+``tracking/wandb_perf.py`` Weights & Biases callback: throughput, MFU/HFU, memory
 """
 
 __version__ = "0.1.0"

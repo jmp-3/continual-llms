@@ -1,24 +1,14 @@
-# FSDP2, FULL_SHARD. For the Task 3 bake-off. Identical to fsdp2_grad_op.yaml except for
-# fsdp_reshard_after_forward.
+# FSDP2, FULL_SHARD - the FSDP analogue of ZeRO-3, for the sharding bake-off. Identical to
+# fsdp2_grad_op.yaml except fsdp_reshard_after_forward: true, which reshards parameters
+# straight after the forward pass and re-gathers them in the backward.
 #
-#   fsdp_reshard_after_forward: true  -> parameters are resharded straight after the forward
-#                                        pass and re-gathered in the backward == FULL_SHARD
+# Parameters cross the PCIe link on every micro-batch, so gradient_accumulation_steps: 64
+# multiplies the communication instead of amortizing it; expect it to be among the slowest
+# arms. It is also likely the only FSDP arm that fits: sharding parameters saves the
+# ~4 GB/GPU that SHARD_GRAD_OP and ZeRO-2 are short of (see docs/engineering-notes.md).
 #
-# This is the FSDP analogue of ZeRO-3 and carries the same trade on this box: parameters
-# move across the PCIe link (measured 6.5 GB/s, no NVLink) on every micro-batch, so
-# gradient_accumulation_steps: 64 multiplies the communication instead of amortizing it.
-# Expect it to be among the slowest of the four.
-#
-# It may also be the only FSDP arm that RUNS. Memory turned out to be the binding constraint
-# after all: Qwen3-4B with fp32 Adam needs ~36 GB/GPU when parameters are not sharded, and
-# OOMs at the first optimizer.step() on 47.4 GiB cards. Sharding parameters is what buys the
-# ~4 GB that makes the difference - so expect fsdp2_grad_op (the ZeRO-2 analogue) to fail the
-# same way ds_zero2 does. See the header of configs/accel/ds_zero2.yaml.
-#
-# FULL_STATE_DICT is what makes save_only_model produce a checkpoint from_pretrained can
-# read - the FSDP counterpart of ZeRO-3's stage3_gather_16bit_weights_on_model_save. With a
-# sharded state dict and no intermediate checkpoints, a stage's weights would be
-# unrecoverable.
+# FULL_STATE_DICT makes save_only_model produce a checkpoint from_pretrained can read - the
+# FSDP counterpart of ZeRO-3's stage3_gather_16bit_weights_on_model_save.
 #
 # Launch:
 #   uv run accelerate launch --config_file configs/accel/fsdp2_full.yaml \
